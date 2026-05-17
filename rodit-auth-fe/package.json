@@ -1,0 +1,53 @@
+{
+  "name": "@rodit/rodit-auth-fe",
+  "version": "4.10.01",
+  "description": "JavaScript sdk for interacting with RODiT authentication and API services",
+  "main": "index.js",
+  "browser": "index.js",
+  "scripts": {
+    "build": "echo 'SDK build complete - no build step required for this package'",
+    "test": "node --test test/",
+    "lint": "eslint .",
+    "docs": "jsdoc -c jsdoc.json"
+  },
+  "keywords": [
+    "rodit",
+    "authentication",
+    "api",
+    "sdk",
+    "rodit"
+  ],
+  "author": "Discernible IO",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "bs58": "^5.0.0",
+    "jwt-decode": "^4.0.0",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.40.0",
+    "jsdoc": "^4.0.2"
+  },
+  "files": [
+    "index.js",
+    "utils.js",
+    "lib/**/*.js",
+    "frontend/**/*.js",
+    "services/**/*.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/discernible-io/rodit-auth-fe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/discernible-io/rodit-auth-fe/issues"
+  },
+  "homepage": "https://github.com/discernible-io/rodit-auth-fe#readme"
+}
