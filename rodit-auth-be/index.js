@@ -9,7 +9,7 @@ const { ulid } = require("ulid");
 const roditManager = require('./lib/auth/roditmanager');
 const stateManager = require('./lib/blockchain/statemanager');
 const authMw = require('./lib/middleware/authenticationmw');
-const { ensureProtocol } = require('./services/utils');
+const { ensureProtocol, isRoditUnboundedDate } = require('./services/utils');
 const { versionManager } = require('./services/versionmanager');
 
 // Import all SDK components that need to be accessible through RoditClient
@@ -1107,7 +1107,8 @@ class RoditClient {
         this.setSessionData({
           id: sessionId,
           createdAt: Math.floor(Date.now() / 1000),
-          expiresAt: Math.floor(Date.now() / 1000) + 3600,
+          expiresAt:
+            Math.floor(Date.now() / 1000) + config.getDefaultJwtDurationSeconds(),
           status: 'active'
         });
       }
@@ -1436,8 +1437,10 @@ class RoditClient {
     const now = new Date();
     let isValid = true;
     
-    // Check not_before date if present
-    if (this.roditMetadata.not_before) {
+    if (
+      this.roditMetadata.not_before &&
+      !isRoditUnboundedDate(this.roditMetadata.not_before)
+    ) {
       const notBefore = new Date(this.roditMetadata.not_before);
       if (now < notBefore) {
         logger.debug('Token not yet valid', {
@@ -1450,8 +1453,10 @@ class RoditClient {
       }
     }
     
-    // Check not_after date if present
-    if (this.roditMetadata.not_after) {
+    if (
+      this.roditMetadata.not_after &&
+      !isRoditUnboundedDate(this.roditMetadata.not_after)
+    ) {
       const notAfter = new Date(this.roditMetadata.not_after);
       if (now > notAfter) {
         logger.debug('Token has expired', {
@@ -1652,8 +1657,7 @@ class RoditClient {
     const now = new Date();
     let isActive = true;
     
-    // Check not_before date if present
-    if (metadata.not_before) {
+    if (metadata.not_before && !isRoditUnboundedDate(metadata.not_before)) {
       const notBefore = new Date(metadata.not_before);
       if (now < notBefore) {
         logger.debug('Subscription not yet active', {
@@ -1666,8 +1670,7 @@ class RoditClient {
       }
     }
     
-    // Check not_after date if present
-    if (metadata.not_after) {
+    if (metadata.not_after && !isRoditUnboundedDate(metadata.not_after)) {
       const notAfter = new Date(metadata.not_after);
       if (now > notAfter) {
         logger.debug('Subscription has expired', {

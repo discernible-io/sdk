@@ -305,7 +305,7 @@ STEPS:
   - FIELD: "SERVICE_NAME": "your-service",
   - FIELD: "SECURITY_OPTIONS": {
   - FIELD: "SILENT_LOGIN_FAILURES": false,
-  - FIELD: "JWT_DURATION": 3600
+  - FIELD: "FALLBACK_JWT_DURATION": 3600  // SECURITY_OPTIONS.FALLBACK_JWT_DURATION — when metadata jwt_duration is invalid
   - }
   - }
 OUTPUTS:
@@ -356,7 +356,7 @@ INPUTS:
 STEPS:
   - NOTE: Success (200)
   - {
-  - FIELD: "jwt_token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9...",
+  - FIELD: "jwt_token": "<jwt-token>",
   - FIELD: "requestId": "01HQXYZ123ABC"
   - }
   - NOTE: Headers:
@@ -1479,7 +1479,7 @@ STEPS:
   - FIELD: export LOKI_BASIC_AUTH="username:password"   # store in secrets
   - DO: export LOKI_TLS_SKIP_VERIFY=true              # only for self-signed/test
   - DO: export LOG_LEVEL=info
-  - DO: export SERVICE_NAME=clienttestapi-api
+  - DO: export SERVICE_NAME=clienttest-idc
 OUTPUTS:
   - Produces the section's intended result using equivalent logic.
 ```
@@ -1507,7 +1507,7 @@ STEPS:
   - SET lokiOptions TO {
   - FIELD: host: process.env.LOKI_URL,
   - FIELD: basicAuth: process.env.LOKI_BASIC_AUTH, // Basic Auth for Loki
-  - FIELD: labels: { app: process.env.SERVICE_NAME || 'clienttestapi-api', component: 'rodit-sdk' },
+  - FIELD: labels: { app: process.env.SERVICE_NAME || 'clienttest-idc', component: 'rodit-sdk' },
   - FIELD: json: true,
   - FIELD: batching: true
   - DO: }
@@ -1535,7 +1535,7 @@ OUTPUTS:
 
  1) Start the app with `LOKI_URL` and `LOKI_BASIC_AUTH` set.
  2) Emit a test log: `logger.info('Loki test', { component: 'SmokeTest' })`.
- 3) In Grafana Explore, query with `{app="clienttestapi-api"}` and confirm logs.
+ 3) In Grafana Explore, query with `{app="clienttest-idc"}` and confirm logs.
 
 ## Performance Tracking
 
@@ -2388,7 +2388,7 @@ INPUTS:
   - Use values defined by the surrounding section/context.
 STEPS:
   - {
-  - FIELD: jwt_token: 'eyJhbGci...',
+  - FIELD: jwt_token: '<jwt-token>',
   - FIELD: requestId: '01HQXYZ...'
   - }
 OUTPUTS:
@@ -2420,7 +2420,7 @@ INPUTS:
 STEPS:
   - {
   - FIELD: message: 'Logout successful',
-  - FIELD: terminationToken: 'eyJhbGci...',  // Short-lived token
+  - FIELD: terminationToken: '<jwt-token>',  // Short-lived token
   - FIELD: requestId: '01HQXYZ...'
   - }
 OUTPUTS:

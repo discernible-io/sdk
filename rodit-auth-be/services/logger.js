@@ -127,7 +127,9 @@ function setLogger(customLogger) {
   if (missing.length) {
     throw new Error(`Injected logger is missing methods: ${missing.join(', ')}`);
   }
+  const previous = currentLogger;
   currentLogger = attachHelpers(customLogger);
+  return previous;
 }
 
 // Export a stable facade that delegates to the current logger
