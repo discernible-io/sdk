@@ -135,12 +135,12 @@ class FileManager {
     }
   }
 
-  // Mock function to maintain interface compatibility with vaultcredentialstoremw.js
-  async setupTokenRenewal(store) {
-    const context = createLogContext("FileCredentialStore", "setupTokenRenewal", {
+  // No-op to maintain interface compatibility with vaultcredentialstoremw.js
+  async setupSecretStorageTokenRenewal() {
+    const context = createLogContext("FileCredentialStore", "setupSecretStorageTokenRenewal", {
       requestId: ulid()
     });
-    logger.debugWithContext("Skipping token renewal setup (not applicable for file-based credentials)", context);
+    logger.debugWithContext("Skipping secret storage token renewal setup (not applicable for file-based credentials)", context);
     return Promise.resolve();
   }
 }
@@ -150,7 +150,7 @@ const fileManager = new FileManager();
 
 module.exports = {
   initializeCredentialStore: (source) => fileManager.initialize(source),
-  setupTokenRenewal: () => fileManager.setupTokenRenewal(),
+  setupSecretStorageTokenRenewal: () => fileManager.setupSecretStorageTokenRenewal(),
   getCredentials: (source) => fileManager.getCredentials(source),
   vault: null,
   // For testing purposes

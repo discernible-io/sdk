@@ -29,7 +29,7 @@ if (RODIT_NEAR_CREDENTIALS_SOURCE === "file") {
 
 const {
   initializeCredentialStore,
-  setupTokenRenewal,
+  setupSecretStorageTokenRenewal,
   getCredentials,
   vault,
 } = credentialStoreModule;
@@ -96,7 +96,7 @@ class RoditManager {
     try {
       const credentialstoreInstance =
         await initializeCredentialStore();
-      await setupTokenRenewal(credentialstoreInstance);
+      await setupSecretStorageTokenRenewal(credentialstoreInstance);
 
       logger.debug(
         "CredentialStore initialization completed through CredentialManager",

@@ -11,7 +11,9 @@ const nacl = require("tweetnacl");
 const crypto = require("crypto");
 const {
   dateStringToUnixTime,
-  unixTimeToDateString
+  unixTimeToDateString,
+  isRoditUnboundedDate,
+  roditNotAfterUnixCap,
 } = require("../../services/utils");
 const { sessionManager } = require('./sessionmanager');
 
@@ -383,18 +385,39 @@ function isCanonicalBase64Url(value) {
       const now = peer_timestamp;
 
       const notafterStart = Date.now();
-      const notafter = await dateStringToUnixTime(
-        peer_rodit.metadata.not_after
-      );
+      const notafterCap = await roditNotAfterUnixCap(peer_rodit.metadata.not_after);
+      const notafterUnbounded = isRoditUnboundedDate(peer_rodit.metadata.not_after);
       const notafterDuration = Date.now() - notafterStart;
+
+      const jwtMaxSecondsRoditUnbounded = parseInt(
+        config.get(
+          "SECURITY_OPTIONS.JWT_MAX_DURATION_SECONDS_RODIT_UNBOUNDED",
+          "86400"
+        ),
+        10
+      );
+      const roditLinkedJwtCap =
+        notafterCap !== null
+          ? notafterCap
+          : now +
+            (Number.isFinite(jwtMaxSecondsRoditUnbounded) &&
+            jwtMaxSecondsRoditUnbounded > 0
+              ? jwtMaxSecondsRoditUnbounded
+              : 86400);
 
       // Get token duration from peer RODiT
       const peerTokenDuration = parseInt(peer_rodit.metadata.jwt_duration, 10);
-      const tokenDuration = Math.floor(peerTokenDuration);
+      let tokenDuration = Math.floor(peerTokenDuration);
+      if (!Number.isFinite(tokenDuration) || tokenDuration <= 0) {
+        tokenDuration = config.getDefaultJwtDurationSeconds();
+      }
 
       // Get session duration from own RODiT (typically longer)
       const ownSessionDuration = parseInt(own_rodit.metadata.jwt_duration, 10);
-      const sessionDuration = Math.floor(ownSessionDuration);
+      let sessionDuration = Math.floor(ownSessionDuration);
+      if (!Number.isFinite(sessionDuration) || sessionDuration <= 0) {
+        sessionDuration = config.getDefaultJwtDurationSeconds();
+      }
 
       // Calculate expirations
       let tokenExpiration = now + tokenDuration;
@@ -403,29 +426,33 @@ function isCanonicalBase64Url(value) {
       logger.debugWithContext("Calculated token parameters", {
         ...baseContext,
         now,
-        notafter,
+        notafterCap,
+        notafterUnbounded,
+        roditLinkedJwtCap,
+        jwtMaxSecondsRoditUnbounded,
         tokenDuration,
         sessionDuration,
         notafterDuration
       });
 
-      // Validate token expiration doesn't exceed RODiT validity
-      if (tokenExpiration > notafter) {
-        tokenExpiration = notafter;
-        logger.debugWithContext("Token expiration capped by RODiT validity", {
+      // Link JWT exp to RODiT not_after: real end date, or configured cap when RODiT never expires.
+      if (tokenExpiration > roditLinkedJwtCap) {
+        tokenExpiration = roditLinkedJwtCap;
+        logger.debugWithContext("Token expiration capped by RODiT-linked limit", {
           ...baseContext,
           tokenExpiration,
-          notafter
+          notafterCap,
+          notafterUnbounded,
+          roditLinkedJwtCap
         });
       }
 
-      // Validate session expiration doesn't exceed RODiT validity
-      if (sessionExpiration > notafter) {
-        sessionExpiration = notafter;
+      if (notafterCap !== null && sessionExpiration > notafterCap) {
+        sessionExpiration = notafterCap;
         logger.debugWithContext("Session expiration capped by RODiT validity", {
           ...baseContext,
           sessionExpiration,
-          notafter
+          notafterCap
         });
       }
 
@@ -871,17 +898,32 @@ function isCanonicalBase64Url(value) {
       // Calculate new token expiration time (using the provided duration)
       const slashedDuration = Math.floor(duration);
       const tokenexpiration = slashedDuration + now;
-      const notafterunixtime = await dateStringToUnixTime(notafter);
+      const notafterCap = await roditNotAfterUnixCap(notafter);
+      const jwtMaxSecondsRoditUnbounded = parseInt(
+        config.get(
+          "SECURITY_OPTIONS.JWT_MAX_DURATION_SECONDS_RODIT_UNBOUNDED",
+          "86400"
+        ),
+        10
+      );
+      const roditLinkedJwtCap =
+        notafterCap !== null
+          ? notafterCap
+          : now +
+            (Number.isFinite(jwtMaxSecondsRoditUnbounded) &&
+            jwtMaxSecondsRoditUnbounded > 0
+              ? jwtMaxSecondsRoditUnbounded
+              : 86400);
 
-      // Ensure token doesn't expire after RODiT validity
-      if (tokenexpiration > notafterunixtime) {
-        logger.error("Token renewal failed - RODiT expired", {
+      if (tokenexpiration > roditLinkedJwtCap) {
+        logger.error("Token renewal failed - RODiT-linked JWT cap exceeded", {
           component: "JwtAuth",
           requestId,
           duration: Date.now() - startTime,
-          notAfterUnixTime: notafterunixtime,
+          notAfterUnixTime: notafterCap,
+          roditLinkedJwtCap,
           tokenExpiration: tokenexpiration,
-          difference: tokenexpiration - notafterunixtime,
+          difference: tokenexpiration - roditLinkedJwtCap,
         });
 
         throw new Error("RODiT has expired");
@@ -1273,20 +1315,15 @@ function isCanonicalBase64Url(value) {
             errorMessage: jwtError.message
           });
           isExpired = true;
-          payload = unverifiedpayload; // Use the unverified payload for renewal
-          
-          // CRITICAL SECURITY: Even though jose's jwtVerify typically validates signature before
-          // checking expiration, we must explicitly verify the signature is valid before proceeding.
-          // We do this by attempting verification with ignoreExpiration option to ensure the
-          // signature itself is cryptographically valid, not just that the token is expired.
+          payload = unverifiedpayload;
+
           try {
             const { jwtVerify: jwtVerifyIgnoreExp } = await getJose();
             await jwtVerifyIgnoreExp(token, sp_public_key, {
               algorithms: ["EdDSA"],
-              currentDate: new Date(unverifiedpayload.exp * 1000 - 1000), // Set clock to before expiration
+              currentDate: new Date(unverifiedpayload.exp * 1000 - 1000),
             });
           } catch (signatureError) {
-            // If signature verification fails even with expiration ignored, this is a tampered token
             logger.error("Expired token has invalid signature - rejecting", {
               component: "JwtAuth",
               method: "validate_jwt_token_be",
@@ -1437,7 +1474,6 @@ function isCanonicalBase64Url(value) {
         throw error;
       }
   
-      // Token expiration check - only perform if we haven't already detected expiration
       const now = Math.floor(Date.now() / 1000);
       if (!isExpired && payload.exp <= now) {
         logger.error("Token validation failed - Token expired", {
@@ -1598,7 +1634,6 @@ function isCanonicalBase64Url(value) {
         );
         newToken = renewalResult.newToken;
         
-        // If token is expired but we got a new token, consider it valid
         if (isExpired && !newToken) {
           logger.error("Token expired and renewal failed", {
             component: "JwtAuth",

@@ -150,13 +150,13 @@ class EnvManager {
     }
   }
 
-  // Mock function to maintain interface compatibility with vaultcredentialstoremw.js
-  async setupTokenRenewal() {
-    const context = createLogContext("EnvCredentialStore", "setupTokenRenewal", {
+  // No-op to maintain interface compatibility with vaultcredentialstoremw.js
+  async setupSecretStorageTokenRenewal() {
+    const context = createLogContext("EnvCredentialStore", "setupSecretStorageTokenRenewal", {
       requestId: ulid(),
     });
     logger.debugWithContext(
-      "Skipping token renewal setup (not applicable for env-based credentials)",
+      "Skipping secret storage token renewal setup (not applicable for env-based credentials)",
       context
     );
     return Promise.resolve();
@@ -168,7 +168,7 @@ const envManager = new EnvManager();
 
 module.exports = {
   initializeCredentialStore: (source) => envManager.initialize(source),
-  setupTokenRenewal: () => envManager.setupTokenRenewal(),
+  setupSecretStorageTokenRenewal: () => envManager.setupSecretStorageTokenRenewal(),
   getCredentials: (source) => envManager.getCredentials(source),
   vault: null,
   // For testing purposes

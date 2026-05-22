@@ -259,6 +259,11 @@ const FALLBACK_DEFAULTS = {
     // - false: require signature verification
     BYPASS_WEBHOOK_VERIFICATION: false,
     LOGIN_MODE: "partner", // Options: "partner" (default), "promiscuous", "p2p"
+    // Default JWT lifetime (seconds) when peer/own RODiT metadata jwt_duration is missing or invalid.
+    FALLBACK_JWT_DURATION: 3600,
+    // Upper bound on JWT exp (seconds from iat) when peer RODiT not_after is unbounded
+    // (1970-01-01 / unix 0). Metadata jwt_duration may be shorter; this value is only a cap.
+    JWT_MAX_DURATION_SECONDS_RODIT_UNBOUNDED: 86400,
   },
   // Default to env-based credential store; host apps can override with RODIT_NEAR_CREDENTIALS_SOURCE env
   credentials: {
@@ -400,6 +405,16 @@ const VALIDATION_RULES = {
       return null;
     }
   },
+  'SECURITY_OPTIONS.FALLBACK_JWT_DURATION': {
+    required: false,
+    type: 'number',
+    validate: (value) => {
+      if (value != null && (value < 60 || value > 86400 * 7)) {
+        return 'SECURITY_OPTIONS.FALLBACK_JWT_DURATION should be between 60 and 604800 seconds (7 days)';
+      }
+      return null;
+    }
+  },
   'NEAR_RPC_TIMEOUT': {
     required: false,
     type: 'number',
@@ -524,11 +539,22 @@ function validate(logger) {
   return true;
 }
 
+/**
+ * Default JWT/session duration (seconds) when RODiT metadata jwt_duration is absent or invalid.
+ *
+ * @returns {number}
+ */
+function getDefaultJwtDurationSeconds() {
+  const parsed = parseInt(get("SECURITY_OPTIONS.FALLBACK_JWT_DURATION", "3600"), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3600;
+}
+
 module.exports = {
   has,
   get,
   getResolved,
   getAllMerged,
+  getDefaultJwtDurationSeconds,
   validate,
   FALLBACK_DEFAULTS,
   VALIDATION_RULES,

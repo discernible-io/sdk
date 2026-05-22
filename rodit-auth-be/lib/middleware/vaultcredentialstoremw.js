@@ -114,7 +114,7 @@ class VaultCredentialManager {
     }
 
     try {
-      // Initialize Vault token
+      // Initialize secret storage token
       this.vault.token = await this.getVaultToken();
       log('Checking Vault health status', { result: 'call', reason: 'Vault health status check requested' });
       
@@ -185,28 +185,28 @@ class VaultCredentialManager {
     }
   }
 
-  async setupTokenRenewal() {
+  async setupSecretStorageTokenRenewal() {
     const requestId = ulid();
     const startTime = Date.now();
     
     // Create a base context for this method
     const baseContext = createLogContext(
       "CredentialManager",
-      "setupTokenRenewal",
+      "setupSecretStorageTokenRenewal",
       { requestId }
     );
     
-    logger.debugWithContext("Starting token renewal setup", baseContext);
+    logger.debugWithContext("Starting secret storage token renewal setup", baseContext);
     
     try {
-      // Get token info to determine TTL
+      // Get secret storage token info to determine TTL
       const tokenInfo = await this.vault.tokenLookupSelf();
       const ttlSeconds = tokenInfo.data.ttl;
       
       // Calculate renewal time (renew at 80% of TTL)
       const renewalTimeMs = (ttlSeconds * 0.8) * 1000;
       
-      logger.infoWithContext("Setting up token renewal", {
+      logger.infoWithContext("Setting up secret storage token renewal", {
         ...baseContext,
         ttlSeconds,
         renewalIntervalMs: renewalTimeMs || this.renewalInterval,
@@ -223,17 +223,17 @@ class VaultCredentialManager {
         // Create a context for the renewal operation
         const renewalContext = createLogContext(
           "CredentialManager",
-          "tokenRenewal",
+          "secretStorageTokenRenewal",
           { requestId: renewalRequestId }
         );
         
-        logger.debugWithContext("Attempting to renew Vault token", renewalContext);
+        logger.debugWithContext("Attempting to renew secret storage token", renewalContext);
         
         try {
-          // Use proper token renewal instead of re-authenticating
+          // Renew secret storage token instead of re-authenticating
           const renewResponse = await this.vault.tokenRenew();
           
-          logger.infoWithContext("Successfully renewed Vault token", {
+          logger.infoWithContext("Successfully renewed secret storage token", {
             ...renewalContext,
             newTtl: renewResponse.auth?.lease_duration || "unknown",
             duration: Date.now() - renewalStartTime
@@ -246,7 +246,7 @@ class VaultCredentialManager {
           });
         } catch (error) {
           logErrorWithMetrics(
-            "Error renewing Vault token, attempting re-authentication", 
+            "Error renewing secret storage token, attempting re-authentication", 
             {
               ...renewalContext,
               duration: Date.now() - renewalStartTime
@@ -260,7 +260,7 @@ class VaultCredentialManager {
             const token = await this.getVaultToken();
             this.vault.token = token;
             
-            logger.infoWithContext("Successfully re-authenticated with Vault", {
+            logger.infoWithContext("Successfully re-authenticated secret storage with Vault", {
               ...renewalContext,
               duration: Date.now() - renewalStartTime
             });
@@ -272,7 +272,7 @@ class VaultCredentialManager {
             });
           } catch (reAuthError) {
             logErrorWithMetrics(
-              "Failed to re-authenticate with Vault", 
+              "Failed to re-authenticate secret storage with Vault", 
               {
                 ...renewalContext,
                 duration: Date.now() - renewalStartTime
@@ -288,7 +288,7 @@ class VaultCredentialManager {
       return true;
     } catch (error) {
       logErrorWithMetrics(
-        "Error setting up token renewal", 
+        "Error setting up secret storage token renewal", 
         {
           ...baseContext,
           duration: Date.now() - startTime
@@ -611,7 +611,7 @@ const vaultManager = new VaultCredentialManager();
 
 module.exports = {
   initializeCredentialStore: () => vaultManager.initialize(),
-  setupTokenRenewal: () => vaultManager.setupTokenRenewal(),
+  setupSecretStorageTokenRenewal: () => vaultManager.setupSecretStorageTokenRenewal(),
   getCredentials: (type) => vaultManager.getCredentials(type),
   vault: vaultManager.vault,
 };

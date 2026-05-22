@@ -110,6 +110,36 @@ async function testFetchWithErrorHandling(url, fetchoptions = {}) {
 }
 
 /**
+ * Sentinel date for RODiT metadata: unbounded not_before / not_after (no expiration / no start bound).
+ * Matches validateAndSetDate default and on-chain metadata convention.
+ */
+const RODIT_UNBOUNDED_DATE = "1970-01-01";
+
+/**
+ * True when a RODiT date field means "unbounded" (not a real calendar end/start).
+ *
+ * @param {string|number|null|undefined} value - Metadata date or unix seconds
+ * @returns {boolean}
+ */
+function isRoditUnboundedDate(value) {
+  if (value == null) {
+    return true;
+  }
+  const trimmed = String(value).trim();
+  if (trimmed === "" || trimmed === "0") {
+    return true;
+  }
+  if (trimmed === RODIT_UNBOUNDED_DATE) {
+    return true;
+  }
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime()) && parsed.getTime() === 0) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Converts a date string to Unix timestamp
  *
  * @param {string} datestring - Date string in ISO format
@@ -120,6 +150,19 @@ async function dateStringToUnixTime(datestring) {
   const unixTimeMs = date.getTime();
   const unixTimeSec = Math.floor(unixTimeMs / 1000);
   return unixTimeSec;
+}
+
+/**
+ * Unix seconds for RODiT not_after used as a JWT/session cap, or null when unbounded.
+ *
+ * @param {string|null|undefined} datestring - RODiT metadata not_after
+ * @returns {Promise<number|null>}
+ */
+async function roditNotAfterUnixCap(datestring) {
+  if (isRoditUnboundedDate(datestring)) {
+    return null;
+  }
+  return dateStringToUnixTime(datestring);
 }
 
 /**
@@ -449,14 +492,14 @@ const validateAndSetDate = (value, field, obj = null) => {
   });
 
   if (value == null || value === "0" || value === "") {
-    logger.debug("Date validation defaulted to 1970-01-01", {
+    logger.debug("Date validation defaulted to RODIT_UNBOUNDED_DATE (no calendar bound)", {
       component: "Validator",
       method: "validateAndSetDate",
       requestId,
       field,
       reason: "Empty or null value",
     });
-    const defaultDate = "1970-01-01";
+    const defaultDate = RODIT_UNBOUNDED_DATE;
 
     if (obj && typeof obj === "object") {
       obj[field] = defaultDate;
@@ -960,11 +1003,14 @@ function parseMetadataJson(json, defaultValue = {}) {
 }
 
 module.exports = {
+  RODIT_UNBOUNDED_DATE,
   base64url2jwk_public_key,
   base64urlToBase64,
   calculateCanonicalHash,
   canonicalizeObject,
   dateStringToUnixTime,
+  isRoditUnboundedDate,
+  roditNotAfterUnixCap,
   ensureProtocol,
   isValidIpRange,
   parseMetadataJson,
