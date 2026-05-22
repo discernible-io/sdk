@@ -1422,11 +1422,12 @@ export class RoditAuthService {
           now,
           exp: payload.exp,
           nbf: payload.nbf,
-          expired: payload.exp <= now,
+          expired: payload.exp !== 0 && payload.exp <= now,
           notYetValid: payload.nbf > now
         });
-        
-        if (payload.exp <= now) {
+
+        // exp === 0: no expiration (same sentinel as on-chain not_after 1970-01-01)
+        if (payload.exp !== 0 && payload.exp <= now) {
           logger.error('[validate_jwt_token_fe] Token has expired', {
             component: 'validate_jwt_token_fe'
           });

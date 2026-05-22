@@ -2273,7 +2273,6 @@ const validateAndSetNumericString = (value, field, obj = null) => {
   throw new Error(`Invalid numeric string for ${field}: ${value}`);
 };
 
-
 module.exports = {
   // Original utils functions
   debugWithType,
