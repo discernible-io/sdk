@@ -247,7 +247,7 @@ STEPS:
   - DO: export VAULT_SECRET_ID=your-secret-id
   - DO: export VAULT_RODIT_KEYVALUE_PATH=secret/rodit
   - DO: export SERVICE_NAME=your-service-name
-  - DO: export NEAR_CONTRACT_ID=rodit.near
+  - DO: export NEAR_CONTRACT_ID=discernible-io.near
 OUTPUTS:
   - Produces the section's intended result using equivalent logic.
 ```
@@ -301,7 +301,7 @@ INPUTS:
   - Use values defined by the surrounding section/context.
 STEPS:
   - {
-  - FIELD: "NEAR_CONTRACT_ID": "rodit.near",
+  - FIELD: "NEAR_CONTRACT_ID": "discernible-io.near",
   - FIELD: "SERVICE_NAME": "your-service",
   - FIELD: "SECURITY_OPTIONS": {
   - FIELD: "SILENT_LOGIN_FAILURES": false,
@@ -1254,7 +1254,7 @@ STEPS:
   - DO: export VAULT_SECRET_ID=your-secret-id
   - DO: export VAULT_RODIT_KEYVALUE_PATH=secret/rodit
   - DO: export SERVICE_NAME=your-service-name
-  - DO: export NEAR_CONTRACT_ID=rodit.near
+  - DO: export NEAR_CONTRACT_ID=discernible-io.near
 OUTPUTS:
   - Produces the section's intended result using equivalent logic.
 ```
@@ -1357,7 +1357,7 @@ STEPS:
   - NOTE: File-based credentials (development)
   - DO: export CREDENTIALS_FILEPATH=./credentials/rodit.json
   - NOTE: NEAR blockchain
-  - DO: export NEAR_CONTRACT_ID=rodit.near
+  - DO: export NEAR_CONTRACT_ID=discernible-io.near
   - FIELD: export NEAR_RPC_URL=https://rpc.mainnet.fastnear.com
   - DO: export NEAR_RPC_CACHE_TTL=5000       # milliseconds
 OUTPUTS:
