@@ -1,6 +1,6 @@
 /**
  * Configuration management
- * Copyright (c) 2025 Discernible IO. All rights reserved.
+ * Copyright (c) 2026 Discernible IO. All rights reserved.
  */
 
 /*
@@ -281,7 +281,7 @@ const FALLBACK_DEFAULTS = {
     },
   },
   NEAR_RPC_URL: "https://rpc.mainnet.fastnear.com",
-  NEAR_CONTRACT_ID: "rodit-org.near",
+  NEAR_CONTRACT_ID: "discernible-io.near",
   SERVICE_NAME: "service-name-not-set",
   // Runtime environment.
   // Options: "main", "development", "test"

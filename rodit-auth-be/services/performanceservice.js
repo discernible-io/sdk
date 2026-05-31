@@ -1,6 +1,6 @@
 /**
  * Performance monitoring service for tracing and metrics collection
- * Copyright (c) 2025 Discernible IO. All rights reserved.
+ * Copyright (c) 2026 Discernible IO. All rights reserved.
  */
 
 const { ulid } = require('ulid');

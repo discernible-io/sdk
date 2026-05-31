@@ -1,6 +1,6 @@
 /**
  * Utility functions for RODiT authentication
- * Copyright (c) 2025 Discernible IO. All rights reserved.
+ * Copyright (c) 2026 Discernible IO. All rights reserved.
  */
 
 const { ulid } = require("ulid");

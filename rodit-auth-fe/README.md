@@ -425,4 +425,4 @@ npm test
 
 ## License
 
-UNLICENSED - Copyright (c) 2025 Discernible IO. All rights reserved.
+UNLICENSED - Copyright (c) 2026 Discernible IO. All rights reserved.

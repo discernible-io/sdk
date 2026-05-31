@@ -1,6 +1,6 @@
 /**
  * RODiT Authentication SDK - Main Entry Point
- * Copyright (c) 2025 Discernible IO. All rights reserved.
+ * Copyright (c) 2026 Discernible IO. All rights reserved.
  *
  * This is the main entry point for the @rodit/rodit-auth-fe npm package.
  * It exports all the necessary functions and classes for RODiT authentication

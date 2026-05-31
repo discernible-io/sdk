@@ -2,7 +2,7 @@
  * File-based credential storage system
  * Alternative to Vault for storing RODiT credentials
  * 
- * Copyright (c) 2025 Discernible IO. All rights reserved.
+ * Copyright (c) 2026 Discernible IO. All rights reserved.
  */
 
 const fs = require('fs').promises;

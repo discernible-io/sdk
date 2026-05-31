@@ -4,7 +4,7 @@
  * This middleware handles API versioning through HTTP headers.
  * It supports both client request versioning and server response versioning.
  * 
- * Copyright (c) 2025 Discernible IO. All rights reserved.
+ * Copyright (c) 2026 Discernible IO. All rights reserved.
  */
 
 const logger = require('../../services/logger');

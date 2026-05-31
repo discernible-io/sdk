@@ -1,6 +1,6 @@
 /**
  * Browser-Compatible Logger Service for RODiT SDK
- * Copyright (c) 2025 Discernible IO. All rights reserved.
+ * Copyright (c) 2026 Discernible IO. All rights reserved.
  *
  * Main-environment oriented: log levels, context sanitization, no sensitive fields in output.
  *
