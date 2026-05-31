@@ -1,6 +1,6 @@
 /**
  * Permission validation middleware
- * Copyright (c) 2025 Discernible IO. All rights reserved.
+ * Copyright (c) 2026 Discernible IO. All rights reserved.
  */
 
 const logger = require("../../services/logger");

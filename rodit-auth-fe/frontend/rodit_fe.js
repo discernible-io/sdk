@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Discernible IO. All rights reserved.
+// Copyright (c) 2026 Discernible IO. All rights reserved.
 
 /**
  * RODiT Frontend Authentication Service

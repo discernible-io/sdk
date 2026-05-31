@@ -1,6 +1,6 @@
 /**
  * Service for interacting with the blockchain network
- * Copyright (c) 2025 Discernible IO. All rights reserved.
+ * Copyright (c) 2026 Discernible IO. All rights reserved.
  */
 
 const { ulid } = require("ulid");
@@ -52,7 +52,7 @@ function _cacheSet(key, value, ttlMs) {
 let _nearTimestampInflightPromise = null;
 /**
  * Data models for RODiT Authentication
- * Copyright (c) 2025 Discernible IO. All rights reserved.
+ * Copyright (c) 2026 Discernible IO. All rights reserved.
  */
 
 /**

@@ -1,7 +1,7 @@
 /**
  * Request logging middleware
  * Provides standardized request/response logging
- * Copyright (c) 2025 Discernible IO. All rights reserved.
+ * Copyright (c) 2026 Discernible IO. All rights reserved.
  */
 
 const logger = require("../../services/logger");
