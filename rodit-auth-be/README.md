@@ -17,6 +17,7 @@ A comprehensive Node.js SDK for implementing RODiT-based mutual authentication, 
   - [Login Mode Control](#login-mode-control)
 - [Authorization & Permissions](#authorization--permissions)
 - [Session Management](#session-management)
+  - [Session lifetime and TTL](#session-lifetime-and-ttl)
 - [Configuration](#configuration)
   - [Environment Variables](#environment-variables)
   - [Session Storage Configuration](#session-storage-configuration)
@@ -305,7 +306,8 @@ STEPS:
   - FIELD: "SERVICE_NAME": "your-service",
   - FIELD: "SECURITY_OPTIONS": {
   - FIELD: "SILENT_LOGIN_FAILURES": false,
-  - FIELD: "FALLBACK_JWT_DURATION": 3600  // SECURITY_OPTIONS.FALLBACK_JWT_DURATION — when metadata jwt_duration is invalid
+  - FIELD: "SESSION_TTL_SECONDS": 5200  // server session lifetime from login (default in SDK)
+  - FIELD: "FALLBACK_JWT_DURATION": 3600  // access-token fallback when passport jwt_duration is invalid
   - }
   - }
 OUTPUTS:
@@ -377,6 +379,7 @@ OUTPUTS:
 Security hardening in current implementation:
 - JWT compact parts must be canonical base64url (non-canonical encodings are rejected).
 - Session registration is enforced during JWT validation (unknown/inactive/expired sessions are rejected).
+- Server session length defaults to `SECURITY_OPTIONS.SESSION_TTL_SECONDS` (5200 s); see [Session lifetime and TTL](#session-lifetime-and-ttl).
 - Token renewal uses `sessionManager` for session checks and updates (no `stateManager` session mutations).
 
 ### Login Implementation
@@ -765,6 +768,88 @@ The SDK includes a comprehensive session management system that:
 - Automatically cleans up expired sessions
 - Integrates with performance metrics
 
+### Session lifetime and TTL
+
+Server sessions and JWT access credentials use **different** clocks:
+
+| Concept | Controlled by | Stored / carried as |
+|---------|----------------|---------------------|
+| **Server session** | `SECURITY_OPTIONS.SESSION_TTL_SECONDS` (host config) | `sessionManager` record `expiresAt`; JWT claim `session_exp` |
+| **Access credential (JWT `exp`)** | Passport `jwt_duration` on peer/own RODiT metadata (+ renewal) | JWT `exp`; renewed until `session_exp` |
+
+You do **not** need to change on-chain `jwt_duration` on the server RODiT token to control how long a **session** lasts. Set session length in application config instead.
+
+#### `SECURITY_OPTIONS.SESSION_TTL_SECONDS`
+
+| Property | Value |
+|----------|--------|
+| **SDK default** | `5200` (~87 minutes) |
+| **Valid range** | `60` – `31536000` (365 days), or `0` to disable |
+| **Config path** | `SECURITY_OPTIONS.SESSION_TTL_SECONDS` |
+| **Env example** | `SECURITY_OPTIONS_SESSION_TTL_SECONDS=2592000` (30 days, with node-config style mapping) |
+
+At login the SDK computes:
+
+```text
+session_expiresAt = login_time + SESSION_TTL_SECONDS
+```
+
+Then applies **passport caps**: if either peer or own RODiT has a bounded `not_after`, the session cannot end later than the **earlier** of those dates.
+
+Set **`SESSION_TTL_SECONDS` to `0`** to fall back to passport-derived session end (bounded `not_after` when present, otherwise `max(peer, own) jwt_duration`).
+
+#### Examples
+
+**Default (5200 seconds):**
+
+```javascript
+// config/default.json — omit SESSION_TTL_SECONDS to use SDK default 5200
+{
+  "SECURITY_OPTIONS": {
+    "FALLBACK_JWT_DURATION": 3600
+  }
+}
+```
+
+**30-day sessions:**
+
+```javascript
+{
+  "SECURITY_OPTIONS": {
+    "SESSION_TTL_SECONDS": 2592000
+  }
+}
+```
+
+**Passport-derived session length (legacy):**
+
+```javascript
+{
+  "SECURITY_OPTIONS": {
+    "SESSION_TTL_SECONDS": 0
+  }
+}
+```
+
+#### Enforcement on each API request
+
+For normal API authentication (`authenticate_apicall`), the SDK:
+
+1. Checks stored session: exists, `status === 'active'`, `expiresAt` not in the past.
+2. Validates JWT signature and `exp` (with renewal when eligible).
+3. Requires JWT `session_exp` to match stored `expiresAt` when session registration is enforced.
+
+Portal/outbound login token validation can skip session registration when `SECURITY_OPTIONS.RELAXED_SESSION_VALIDATION` is `true` (default).
+
+#### Related options
+
+| Option | Purpose |
+|--------|---------|
+| `FALLBACK_JWT_DURATION` | Access-token lifetime when passport `jwt_duration` is missing or invalid (default `3600`; max 7 days in validator) |
+| `JWT_MAX_DURATION_SECONDS_RODIT_UNBOUNDED` | Cap on JWT `exp` when peer `not_after` is unbounded |
+| `RELAXED_SESSION_VALIDATION` | Portal/outbound flows may skip server session lookup |
+| `SESSION_VALIDATION_CACHE_TTL` | Cache TTL for session invalidation checks after logout |
+
 ### Session Storage Backends
 
 #### 1. In-Memory Storage (Default)
@@ -1040,7 +1125,7 @@ OUTPUTS:
 1. **Login** - Session created, JWT token issued with session ID
 2. **Active** - Token validated on each request, session last_accessed updated
 3. **Logout** - Session closed, token invalidated, termination token issued
-4. **Expiration** - Sessions automatically expire based on JWT duration
+4. **Expiration** - Sessions expire when stored `expiresAt` is reached (`SESSION_TTL_SECONDS` from login, capped by passport `not_after`)
 5. **Cleanup** - Expired sessions removed by automatic cleanup process
 
 ### Token Invalidation
@@ -1409,6 +1494,10 @@ STEPS:
   - DO: export SECURITY_OPTIONS_DURATIONRAMP=0.85
   - DO: export SECURITY_OPTIONS_SERVERORCLIENT=SERVER-INITIATED
   - DO: export SECURITY_OPTIONS_SILENT_LOGIN_FAILURES=false
+  - NOTE: Server session lifetime (seconds from login; SDK default 5200)
+  - DO: export SECURITY_OPTIONS_SESSION_TTL_SECONDS=5200
+  - NOTE: Access-token fallback when passport jwt_duration is invalid
+  - DO: export SECURITY_OPTIONS_FALLBACK_JWT_DURATION=3600
 OUTPUTS:
   - Produces the section's intended result using equivalent logic.
 ```
@@ -2785,7 +2874,7 @@ When you call `roditClient.getConfigOwnRodit()`, you get access to these metadat
 | `token_id` | string | Unique RODiT token identifier |
 | `allowed_cidr` | string | Permitted IP address ranges (CIDR format) |
 | `allowed_iso3166list` | string | Geographic restrictions (JSON string) |
-| `jwt_duration` | number | JWT token lifetime in seconds |
+| `jwt_duration` | number | Access JWT credential lifetime in seconds (renewed until `session_exp`; does not set server session length when `SESSION_TTL_SECONDS` is configured) |
 | `max_requests` | string | Rate limit - maximum requests per window |
 | `maxrq_window` | string | Rate limit - time window in seconds |
 | `not_before` | string | Token validity start date (ISO format) |

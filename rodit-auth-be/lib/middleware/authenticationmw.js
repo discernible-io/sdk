@@ -50,7 +50,8 @@ async function getJose() {
   return _josePromise;
 }
 
-// Shared relaxed session check used for outbound login token validation.
+// Portal/outbound login only: skip server session registration when relaxed (default).
+// API auth does not pass these options and always enforces stored session + expiresAt.
 const RELAXED_SESSION_VALIDATION_OPTIONS = Object.freeze({
   enforceSessionRegistration: !config.get(
     "SECURITY_OPTIONS.RELAXED_SESSION_VALIDATION",

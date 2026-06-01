@@ -259,7 +259,10 @@ const FALLBACK_DEFAULTS = {
     // - false: require signature verification
     BYPASS_WEBHOOK_VERIFICATION: false,
     LOGIN_MODE: "partner", // Options: "partner" (default), "promiscuous", "p2p"
-    // Default JWT lifetime (seconds) when peer/own RODiT metadata jwt_duration is missing or invalid.
+    // Server session lifetime (seconds) from login. Independent of passport jwt_duration.
+    // Still capped by peer/own not_after when bounded. Set 0 to use passport-derived rules.
+    SESSION_TTL_SECONDS: 5200,
+    // Default access-token lifetime when passport jwt_duration is missing or invalid.
     FALLBACK_JWT_DURATION: 3600,
     // Upper bound on JWT exp (seconds from iat) when peer RODiT not_after is unbounded
     // (1970-01-01 / unix 0). Metadata jwt_duration may be shorter; this value is only a cap.
@@ -415,6 +418,16 @@ const VALIDATION_RULES = {
       return null;
     }
   },
+  'SECURITY_OPTIONS.SESSION_TTL_SECONDS': {
+    required: false,
+    type: 'number',
+    validate: (value) => {
+      if (value != null && (value < 60 || value > 86400 * 365)) {
+        return 'SECURITY_OPTIONS.SESSION_TTL_SECONDS should be between 60 and 31536000 seconds (365 days)';
+      }
+      return null;
+    }
+  },
   'NEAR_RPC_TIMEOUT': {
     required: false,
     type: 'number',
@@ -540,7 +553,7 @@ function validate(logger) {
 }
 
 /**
- * Default JWT/session duration (seconds) when RODiT metadata jwt_duration is absent or invalid.
+ * Default access-token duration (seconds) when RODiT metadata jwt_duration is absent or invalid.
  *
  * @returns {number}
  */
@@ -549,12 +562,26 @@ function getDefaultJwtDurationSeconds() {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 3600;
 }
 
+/**
+ * Server session TTL from login (seconds), or null when 0/disabled (passport-derived rules).
+ *
+ * @returns {number|null}
+ */
+function getSessionTtlSeconds() {
+  const parsed = parseInt(get("SECURITY_OPTIONS.SESSION_TTL_SECONDS", "5200"), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return Math.floor(parsed);
+}
+
 module.exports = {
   has,
   get,
   getResolved,
   getAllMerged,
   getDefaultJwtDurationSeconds,
+  getSessionTtlSeconds,
   validate,
   FALLBACK_DEFAULTS,
   VALIDATION_RULES,

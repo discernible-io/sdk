@@ -47,6 +47,25 @@ const { sendError, buildErrorResponse } = errorResponse;
 const logger = require('./services/logger');
 // Avoid circular dependency - will require filecredentialsstore dynamically when needed
 
+function sessionFieldsFromJwt(token) {
+  if (!token || typeof token !== "string") {
+    return {};
+  }
+  const parts = token.split(".");
+  if (parts.length !== 3) {
+    return {};
+  }
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());
+    return {
+      sessionId: payload.session_id,
+      expiresAt: payload.session_exp,
+      createdAt: payload.session_iat,
+    };
+  } catch (_error) {
+    return {};
+  }
+}
 
 /**
  * RODiT Client Interface
@@ -1102,13 +1121,15 @@ class RoditClient {
         this.jwt_token = loginResult.jwt_token;
         this.setSessionToken(loginResult.jwt_token);
 
-        const sessionId = ulid();
-        this.sessionId = sessionId;
+        const fromJwt = sessionFieldsFromJwt(loginResult.jwt_token);
+        const nowSec = Math.floor(Date.now() / 1000);
+        this.sessionId = fromJwt.sessionId || ulid();
         this.setSessionData({
-          id: sessionId,
-          createdAt: Math.floor(Date.now() / 1000),
+          id: this.sessionId,
+          createdAt: fromJwt.createdAt ?? nowSec,
           expiresAt:
-            Math.floor(Date.now() / 1000) + config.getDefaultJwtDurationSeconds(),
+            fromJwt.expiresAt ??
+            nowSec + config.getDefaultJwtDurationSeconds(),
           status: 'active'
         });
       }

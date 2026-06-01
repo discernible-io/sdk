@@ -62,6 +62,55 @@ function isCanonicalBase64Url(value) {
   }
 }
 
+function parseRoditJwtDurationSeconds(metadata) {
+  const parsed = parseInt(metadata?.jwt_duration, 10);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+  return config.getDefaultJwtDurationSeconds();
+}
+
+/**
+ * Server session end time (unix seconds).
+ * Prefers SECURITY_OPTIONS.SESSION_TTL_SECONDS when set; else passport not_after / jwt_duration.
+ * Always capped by bounded peer/own not_after. Credential JWT exp is separate (renewal).
+ */
+async function resolveSessionExpirationUnix(peer_rodit, own_rodit, now) {
+  const peerCap = await roditNotAfterUnixCap(peer_rodit?.metadata?.not_after);
+  const ownCap = await roditNotAfterUnixCap(own_rodit?.metadata?.not_after);
+  const notAfterCaps = [peerCap, ownCap].filter((cap) => cap !== null);
+
+  const configuredTtl = config.getSessionTtlSeconds();
+  let sessionExpiration;
+
+  if (configuredTtl != null) {
+    sessionExpiration = now + configuredTtl;
+  } else if (notAfterCaps.length > 0) {
+    sessionExpiration = Math.min(...notAfterCaps);
+  } else {
+    const peerSec = parseRoditJwtDurationSeconds(peer_rodit?.metadata);
+    const ownSec = parseRoditJwtDurationSeconds(own_rodit?.metadata);
+    sessionExpiration = now + Math.max(peerSec, ownSec);
+  }
+
+  for (const cap of notAfterCaps) {
+    if (sessionExpiration > cap) {
+      sessionExpiration = cap;
+    }
+  }
+
+  return sessionExpiration;
+}
+
+/** Short-lived access credential; renewed until session expires. */
+function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
+  let tokenExpiration = now + parseRoditJwtDurationSeconds(own_rodit?.metadata);
+  if (tokenExpiration > sessionExpiration) {
+    tokenExpiration = sessionExpiration;
+  }
+  return tokenExpiration;
+}
+
   /**
    * Converts a base64url string to a JWK public key
    *
@@ -385,76 +434,31 @@ function isCanonicalBase64Url(value) {
       const now = peer_timestamp;
 
       const notafterStart = Date.now();
-      const notafterCap = await roditNotAfterUnixCap(peer_rodit.metadata.not_after);
-      const notafterUnbounded = isRoditUnboundedDate(peer_rodit.metadata.not_after);
-      const notafterDuration = Date.now() - notafterStart;
-
-      const jwtMaxSecondsRoditUnbounded = parseInt(
-        config.get(
-          "SECURITY_OPTIONS.JWT_MAX_DURATION_SECONDS_RODIT_UNBOUNDED",
-          "86400"
-        ),
-        10
+      const sessionExpiration = await resolveSessionExpirationUnix(
+        peer_rodit,
+        own_rodit,
+        now
       );
-      const roditLinkedJwtCap =
-        notafterCap !== null
-          ? notafterCap
-          : now +
-            (Number.isFinite(jwtMaxSecondsRoditUnbounded) &&
-            jwtMaxSecondsRoditUnbounded > 0
-              ? jwtMaxSecondsRoditUnbounded
-              : 86400);
-
-      // Get token duration from peer RODiT
-      const peerTokenDuration = parseInt(peer_rodit.metadata.jwt_duration, 10);
-      let tokenDuration = Math.floor(peerTokenDuration);
-      if (!Number.isFinite(tokenDuration) || tokenDuration <= 0) {
-        tokenDuration = config.getDefaultJwtDurationSeconds();
-      }
-
-      // Get session duration from own RODiT (typically longer)
-      const ownSessionDuration = parseInt(own_rodit.metadata.jwt_duration, 10);
-      let sessionDuration = Math.floor(ownSessionDuration);
-      if (!Number.isFinite(sessionDuration) || sessionDuration <= 0) {
-        sessionDuration = config.getDefaultJwtDurationSeconds();
-      }
-
-      // Calculate expirations
-      let tokenExpiration = now + tokenDuration;
-      let sessionExpiration = now + sessionDuration;
+      const tokenExpiration = resolveCredentialExpirationUnix(
+        now,
+        sessionExpiration,
+        own_rodit
+      );
+      const sessionValidFor = sessionExpiration - now;
+      const credentialValidFor = tokenExpiration - now;
+      const notafterDuration = Date.now() - notafterStart;
 
       logger.debugWithContext("Calculated token parameters", {
         ...baseContext,
         now,
-        notafterCap,
-        notafterUnbounded,
-        roditLinkedJwtCap,
-        jwtMaxSecondsRoditUnbounded,
-        tokenDuration,
-        sessionDuration,
+        sessionExpiration,
+        tokenExpiration,
+        sessionValidFor,
+        credentialValidFor,
+        credentialShorterThanSession: credentialValidFor < sessionValidFor,
+        sessionTtlSeconds: config.getSessionTtlSeconds(),
         notafterDuration
       });
-
-      // Link JWT exp to RODiT not_after: real end date, or configured cap when RODiT never expires.
-      if (tokenExpiration > roditLinkedJwtCap) {
-        tokenExpiration = roditLinkedJwtCap;
-        logger.debugWithContext("Token expiration capped by RODiT-linked limit", {
-          ...baseContext,
-          tokenExpiration,
-          notafterCap,
-          notafterUnbounded,
-          roditLinkedJwtCap
-        });
-      }
-
-      if (notafterCap !== null && sessionExpiration > notafterCap) {
-        sessionExpiration = notafterCap;
-        logger.debugWithContext("Session expiration capped by RODiT validity", {
-          ...baseContext,
-          sessionExpiration,
-          notafterCap
-        });
-      }
 
       const notbeforeStart = Date.now();
       const notbefore = await dateStringToUnixTime(
@@ -929,6 +933,12 @@ function isCanonicalBase64Url(value) {
         throw new Error("RODiT has expired");
       }
 
+      const sessionExpUnix =
+        token.session_exp != null ? Number(token.session_exp) : null;
+      if (Number.isFinite(sessionExpUnix) && tokenexpiration > sessionExpUnix) {
+        tokenexpiration = sessionExpUnix;
+      }
+
       const configStart = Date.now();
       const config_own_rodit = await stateManager.getConfigOwnRodit();
       const configDuration = Date.now() - configStart;
@@ -1354,15 +1364,10 @@ function isCanonicalBase64Url(value) {
         // Signature already verified by jwtVerify.
       }
 
+      // API auth always enforces server session registration; portal/outbound login
+      // passes enforceSessionRegistration: false via RELAXED_SESSION_VALIDATION_OPTIONS.
       const enforceSessionRegistration =
-        options.enforceSessionRegistration !== undefined
-          ? !!options.enforceSessionRegistration
-          : String(
-              config.get(
-                "SECURITY_OPTIONS.ENFORCE_JWT_SESSION_REGISTRATION",
-                "true"
-              )
-            ).toLowerCase() === "true";
+        options.enforceSessionRegistration !== false;
 
       if (enforceSessionRegistration) {
         const tokenSessionId = payload?.session_id;
@@ -1406,6 +1411,23 @@ function isCanonicalBase64Url(value) {
             roditId: payload?.rodit_id,
           });
           throw new Error("Error 012: Session is not active");
+        }
+
+        if (
+          payload?.session_exp != null &&
+          registeredSession.expiresAt != null &&
+          Number(payload.session_exp) !== Number(registeredSession.expiresAt)
+        ) {
+          logger.warn("Token validation failed - session_exp mismatch with storage", {
+            component: "JwtAuth",
+            method: "validate_jwt_token_be",
+            requestId,
+            tokenDigest,
+            sessionId: tokenSessionId,
+            claimSessionExp: payload.session_exp,
+            storageExpiresAt: registeredSession.expiresAt,
+          });
+          throw new Error("Error 014: Session expiration claim does not match registered session");
         }
 
         if (
