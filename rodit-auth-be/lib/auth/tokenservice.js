@@ -901,7 +901,7 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
 
       // Calculate new token expiration time (using the provided duration)
       const slashedDuration = Math.floor(duration);
-      const tokenexpiration = slashedDuration + now;
+      let tokenexpiration = slashedDuration + now;
       const notafterCap = await roditNotAfterUnixCap(notafter);
       const jwtMaxSecondsRoditUnbounded = parseInt(
         config.get(
