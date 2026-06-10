@@ -25,9 +25,8 @@ logger.infoWithContext("TokenService using SessionManager instance", {
   timestamp: new Date().toISOString()
 });
 const stateManager = require('../blockchain/statemanager');
-const {  
-  nearorg_rpc_tokenfromroditid, 
-  nearorg_rpc_tokensfromaccountid, 
+const {
+  nearorg_rpc_tokenfromroditid,
   nearorg_rpc_fetchpublickeybytes,
 } = require("../blockchain/blockchainservice");
 
@@ -60,6 +59,15 @@ function isCanonicalBase64Url(value) {
   } catch (_error) {
     return false;
   }
+}
+
+/** Login peer RODiT token id embedded in JWT sub (`{sp};sub={peerTokenId}`). */
+function extractLoginPeerRoditIdFromSub(sub) {
+  if (!sub || typeof sub !== "string") {
+    return "";
+  }
+  const subParts = sub.split(";sub=");
+  return subParts.length > 1 ? subParts[1] : "";
 }
 
 function parseRoditJwtDurationSeconds(metadata) {
@@ -965,6 +973,31 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
         keyCreationDuration,
       });
 
+      const signatureStart = Date.now();
+      const timeString = await unixTimeToDateString(now);
+      const roditidandtimestamp = new TextEncoder().encode(
+        token.rodit_id + timeString
+      );
+      let privateKeyToUse = config_own_rodit.own_rodit_bytes_private_key;
+      if (Buffer.isBuffer(privateKeyToUse)) {
+        privateKeyToUse = new Uint8Array(privateKeyToUse);
+      } else if (!(privateKeyToUse instanceof Uint8Array)) {
+        privateKeyToUse = new Uint8Array(Array.from(privateKeyToUse));
+      }
+      const own_rodit_bytes_signature = nacl.sign.detached(
+        roditidandtimestamp,
+        privateKeyToUse
+      );
+      const renewed_rodit_idsignature = Buffer.from(
+        own_rodit_bytes_signature
+      ).toString("base64url");
+      logger.debug("Regenerated rodit_idsignature for renewed credential", {
+        requestId,
+        signatureDuration: Date.now() - signatureStart,
+        roditId: token.rodit_id,
+        iat: now,
+      });
+
       // Keep existing session ID and creation time
       const session_id = existingSessionId;
       const session_iat = token.session_iat;
@@ -1020,7 +1053,7 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
         rodit_id: token.rodit_id,
         rodit_owner: token.rodit_owner,
         rodit_allowediso3166list: token.rodit_allowediso3166list,
-        rodit_idsignature: token.rodit_idsignature,
+        rodit_idsignature: renewed_rodit_idsignature,
         rodit_maxrequests: token.rodit_maxrequests,
         rodit_maxrqwindow: token.rodit_maxrqwindow,
         rodit_permissionedroutes: token.rodit_permissionedroutes,
@@ -1657,14 +1690,35 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
         newToken = renewalResult.newToken;
         
         if (isExpired && !newToken) {
-          logger.error("Token expired and renewal failed", {
-            component: "JwtAuth",
-            method: "validate_jwt_token_be",
-            requestId,
-            jti: payload.jti
-          });
-          
-          throw new Error("Error 007: Token has expired and renewal failed");
+          const renewalNow = Math.floor(Date.now() / 1000);
+          const sessionExpUnix =
+            payload.session_exp != null ? Number(payload.session_exp) : null;
+          const sessionStillActive =
+            Number.isFinite(sessionExpUnix) && sessionExpUnix > renewalNow;
+
+          if (sessionStillActive) {
+            logger.warn(
+              "Credential expired and renewal failed but session still active; allowing request",
+              {
+                component: "JwtAuth",
+                method: "validate_jwt_token_be",
+                requestId,
+                jti: payload.jti,
+                sessionExp: sessionExpUnix,
+                now: renewalNow,
+              }
+            );
+          } else {
+            logger.error("Token expired and renewal failed", {
+              component: "JwtAuth",
+              method: "validate_jwt_token_be",
+              requestId,
+              jti: payload.jti,
+              sessionExp: sessionExpUnix,
+            });
+
+            throw new Error("Error 007: Token has expired and renewal failed");
+          }
         }
       } else if (isExpired) {
         logger.info("Allowing signature-valid expired token for special flow", {
@@ -1727,20 +1781,30 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
     const startTime = Date.now();
 
     try {
+      const extractedSub = extractLoginPeerRoditIdFromSub(token.sub);
+      if (!extractedSub) {
+        const duration = Date.now() - startTime;
+        logger.warn("Brief token validation failed - missing login peer in sub", {
+          component: "JwtAuth",
+          method: "brief_validate_jwt_token_be",
+          requestId,
+          duration,
+          tokenJti: token.jti,
+          tokenSub: token.sub,
+        });
+        logger.metric("jwt_brief_validation", duration, {
+          result: "failure",
+          token_jti: token.jti || "unknown",
+          id_match: "false",
+        });
+        return { isValid: false, notAfter: null };
+      }
+
       const tokenFetchStart = Date.now();
-      const peer_rodit =
-        await nearorg_rpc_tokensfromaccountid(
-          
-          token.aud
-        );
+      const peer_rodit = await nearorg_rpc_tokenfromroditid(extractedSub);
       const tokenFetchDuration = Date.now() - tokenFetchStart;
 
-      const subParts = token.sub.split(";sub=");
-      const extractedSub = subParts.length > 1 ? subParts[1] : "";
-
-      const isValid =
-        peer_rodit.token_id === extractedSub &&
-        peer_rodit.owner_id === token.aud;
+      const isValid = !!peer_rodit?.token_id && peer_rodit.token_id === extractedSub;
 
       const totalDuration = Date.now() - startTime;
 
@@ -1753,6 +1817,7 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
           tokenFetchDuration,
           tokenJti: token.jti,
           peerRoditId: peer_rodit.token_id,
+          extractedSub,
           notAfter: peer_rodit.metadata.not_after,
         });
 
@@ -1769,26 +1834,23 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
           duration: totalDuration,
           tokenFetchDuration,
           tokenJti: token.jti,
-          peerRoditId: peer_rodit.token_id,
+          peerRoditId: peer_rodit?.token_id || null,
           extractedSub,
           tokenAud: token.aud,
-          peerRoditOwnerId: peer_rodit.owner_id,
-          idMatch: peer_rodit.token_id === extractedSub,
-          ownerMatch: peer_rodit.owner_id === token.aud,
+          idMatch: peer_rodit?.token_id === extractedSub,
         });
 
         // Add metrics for failed brief validations
         logger.metric("jwt_brief_validation", totalDuration, {
           result: "failure",
           token_jti: token.jti || "unknown",
-          id_match: peer_rodit.token_id === extractedSub ? "true" : "false",
-          owner_match: peer_rodit.owner_id === token.aud ? "true" : "false",
+          id_match: peer_rodit?.token_id === extractedSub ? "true" : "false",
         });
       }
 
       return {
         isValid,
-        notAfter: peer_rodit.metadata.not_after,
+        notAfter: peer_rodit?.metadata?.not_after ?? null,
       };
     } catch (error) {
       const duration = Date.now() - startTime;
@@ -1831,14 +1893,32 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
   const startTime = performance.now(); // More precise timing measurement
 
   try {
+    const extractedSub = extractLoginPeerRoditIdFromSub(token.sub);
+    if (!extractedSub) {
+      logger.warn("Thorough token validation failed - missing login peer in sub", {
+        component: "JwtAuth",
+        method: "thorough_validate_jwt_token_be",
+        requestId,
+        duration: performance.now() - startTime,
+        tokenJti: token?.jti,
+        tokenSub: token?.sub,
+      });
+      logger.metric &&
+        logger.metric("jwt_thorough_validation", performance.now() - startTime, {
+          result: "missing_login_peer_sub",
+          token_jti: token.jti || "unknown",
+        });
+      return { isValid: false, notAfter: null };
+    }
+
     // Fetch configuration with better timing measurements
     const configStart = performance.now();
     const config_own_rodit = await stateManager.getConfigOwnRodit();
     const configDuration = performance.now() - configStart;
 
-    // Fetch peer RODiT with clearer logging
+    // Fetch login peer RODiT (client identity from sub), not server passport (rodit_id claim)
     const tokenFetchStart = performance.now();
-    const peer_rodit = await nearorg_rpc_tokenfromroditid(token.rodit_id);
+    const peer_rodit = await nearorg_rpc_tokenfromroditid(extractedSub);
     const tokenFetchDuration = performance.now() - tokenFetchStart;
 
     if (!peer_rodit) {
@@ -1846,7 +1926,7 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
         component: "JwtAuth",
         requestId,
         duration: performance.now() - startTime,
-        tokenRoditId: token?.rodit_id,
+        loginPeerRoditId: extractedSub,
       });
 
       // Add metrics for failed token fetch
@@ -2075,11 +2155,7 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
       };
     }
 
-    // Extract subject and perform final validation
-    const subParts = token.sub.split(";sub=");
-    const extractedSub = subParts.length > 1 ? subParts[1] : "";
-
-    logger.debug("Extracted subject from token", {
+    logger.debug("Login peer identity check", {
       requestId,
       extractedSub,
       tokenSub: token.sub,
@@ -2088,10 +2164,8 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
       tokenAud: token.aud,
     });
 
-    // Additional identity checks
     const idMatch = peer_rodit.token_id === extractedSub;
-    const ownerMatch = peer_rodit.owner_id === token.aud;
-    const isValid = idMatch && ownerMatch;
+    const isValid = idMatch;
 
     const totalDuration = performance.now() - startTime;
 
@@ -2114,10 +2188,6 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
           peer_rodit_id: peer_rodit.token_id,
         });
     } else {
-      const failedIdentityChecks = [];
-      if (!idMatch) failedIdentityChecks.push("token_id_mismatch");
-      if (!ownerMatch) failedIdentityChecks.push("owner_id_mismatch");
-
       logger.warn("Token identity verification failed", {
         component: "JwtAuth",
         method: "thorough_validate_jwt_token_be",
@@ -2129,8 +2199,7 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
         tokenAud: token.aud,
         peerRoditOwnerId: peer_rodit.owner_id,
         idMatch,
-        ownerMatch,
-        failedIdentityChecks,
+        failedIdentityChecks: ["token_id_mismatch"],
       });
 
       // Add metrics for identity mismatch with more details
@@ -2138,19 +2207,22 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
         logger.metric("jwt_thorough_validation", totalDuration, {
           result: "identity_mismatch",
           token_jti: token.jti || "unknown",
-          id_match: idMatch ? "true" : "false",
-          owner_match: ownerMatch ? "true" : "false",
-          failed_checks: failedIdentityChecks.join(","),
+          id_match: "false",
+          failed_checks: "token_id_mismatch",
           peer_rodit_id: peer_rodit.token_id,
         });
     }
+
+    const failedIdentityChecks = !isValid ? ["token_id_mismatch"] : [];
 
     return {
       isValid,
       notAfter: peer_rodit.metadata.not_after,
       error: !isValid ? "Token identity verification failed" : undefined,
       errorCode: !isValid ? "SERVER_TOKEN_IDENTITY_MISMATCH" : undefined,
-      errorMessage: !isValid ? `Server token identity mismatch: ${failedIdentityChecks.join(", ")}` : undefined
+      errorMessage: !isValid
+        ? `Server token identity mismatch: ${failedIdentityChecks.join(", ")}`
+        : undefined
     };
   } catch (error) {
     const duration = performance.now() - startTime;
@@ -2188,6 +2260,70 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
 }
 
   /**
+   * Decide brief vs thorough renewal verification using existing SECURITY_OPTIONS constants.
+   *
+   * @param {Object} params
+   * @returns {Object} Plan with shouldDoFullVerification, urgency, pThorough, newduration, floors
+   */
+  function resolveRenewalVerificationPlan({
+    forceRenewal = false,
+    durationLeftpct = 0,
+    currentDuration = 0,
+    lapsedProportion = 0.8,
+    thresholdValidationType = 0.1,
+    durationRamp = 0.85,
+    fallbackJwtDuration = 3600,
+    roditMaxRqWindow,
+    randomNumber = Math.random(),
+  }) {
+    const eligibilityTail = 1.0 - lapsedProportion;
+    const safeCurrentDuration = Math.max(0, Number(currentDuration) || 0);
+    const newduration = safeCurrentDuration * durationRamp;
+
+    let urgency;
+    if (forceRenewal) {
+      urgency = 1;
+    } else if (eligibilityTail <= 0) {
+      urgency = 1;
+    } else {
+      const tailFraction = durationLeftpct / 100 / eligibilityTail;
+      urgency = Math.min(1, Math.max(0, 1 - tailFraction));
+    }
+
+    const pThorough =
+      thresholdValidationType + urgency * (1 - thresholdValidationType);
+
+    const baselineDuration = Math.max(1, Number(fallbackJwtDuration) || 3600);
+    const rampedFloor = baselineDuration * eligibilityTail * durationRamp;
+    const maxRqWindow = Number(roditMaxRqWindow) || baselineDuration;
+    const rqWindowFloor = maxRqWindow * eligibilityTail;
+
+    const stochasticThorough = urgency >= 1 || randomNumber < pThorough;
+    const rampedFloorThorough = newduration <= rampedFloor;
+    const rqWindowFloorThorough = newduration <= rqWindowFloor;
+    const deterministicThorough = rampedFloorThorough || rqWindowFloorThorough;
+
+    let verificationReason = "brief";
+    if (deterministicThorough) {
+      verificationReason = rampedFloorThorough ? "ramped_floor" : "rq_window_floor";
+    } else if (stochasticThorough) {
+      verificationReason = "stochastic";
+    }
+
+    return {
+      shouldDoFullVerification: stochasticThorough || deterministicThorough,
+      urgency,
+      pThorough,
+      newduration,
+      rampedFloor,
+      rqWindowFloor,
+      stochasticThorough,
+      deterministicThorough,
+      verificationReason,
+    };
+  }
+
+  /**
    * Check if a token needs renewal and renew if necessary
    *
    * @param {Object} payload - Token payload
@@ -2210,12 +2346,16 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
     const DURATIONRAMP = parseFloat(
       config.get('SECURITY_OPTIONS.DURATIONRAMP', '0.85')
     );
+    const FALLBACK_JWT_DURATION = parseInt(
+      config.get('SECURITY_OPTIONS.FALLBACK_JWT_DURATION', '3600'),
+      10
+    );
 
     const currentTime = Math.floor(Date.now() / 1000);
     const timeLeft = payload.exp - currentTime;
     const currentDuration = payload.exp - payload.iat;
-    const durationLeftpct = (timeLeft / currentDuration) * 100;
-    const newduration = currentDuration * DURATIONRAMP;
+    const durationLeftpct =
+      currentDuration > 0 ? (timeLeft / currentDuration) * 100 : 0;
 
     // Log session information
     const sessionInfo = {
@@ -2275,13 +2415,40 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
       ...sessionInfo,
     });
 
-    // Determine verification method
-    const randomNumber = Math.random();
-    const shouldDoFullVerification =
-      randomNumber < THRESHOLD_VALIDATION_TYPE ||
-      newduration >
-        payload.rodit_maxrqwindow *
-          (100 - (LAPSED_LIFETIME_PROPORTION_4RENEWAL_ELIGIBILITY * 100));
+    const renewalPlan = resolveRenewalVerificationPlan({
+      forceRenewal,
+      durationLeftpct,
+      currentDuration,
+      lapsedProportion: LAPSED_LIFETIME_PROPORTION_4RENEWAL_ELIGIBILITY,
+      thresholdValidationType: THRESHOLD_VALIDATION_TYPE,
+      durationRamp: DURATIONRAMP,
+      fallbackJwtDuration: FALLBACK_JWT_DURATION,
+      roditMaxRqWindow: payload.rodit_maxrqwindow,
+    });
+    const {
+      shouldDoFullVerification,
+      urgency,
+      pThorough,
+      newduration,
+      rampedFloor,
+      rqWindowFloor,
+      verificationReason,
+    } = renewalPlan;
+
+    logger.debug("Renewal verification plan", {
+      component: "TokenRenewalService",
+      method: "checkandrenew_jwt_token",
+      requestId,
+      forceRenewal,
+      durationLeftpct: durationLeftpct.toFixed(1),
+      urgency: urgency.toFixed(3),
+      pThorough: pThorough.toFixed(3),
+      newduration: Math.floor(newduration),
+      rampedFloor: Math.floor(rampedFloor),
+      rqWindowFloor: Math.floor(rqWindowFloor),
+      verificationReason,
+      shouldDoFullVerification,
+    });
 
     const verificationStartTime = Date.now();
 
@@ -2366,7 +2533,7 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
           logInfo: {
             newDuration: newduration,
             reason: shouldDoFullVerification
-              ? "Thorough verification"
+              ? `Thorough verification (${verificationReason})`
               : "Brief verification",
             notAfter: notAfter,
             renewalDuration,
@@ -2409,10 +2576,18 @@ async function thorough_validate_jwt_token_be(token, requestId = ulid()) {
 
 
 // Export the class directly (will be instantiated in rodit.js)
-module.exports = {generate_jwt_token,base64url2jwk_public_key,
+module.exports = {
+  generate_jwt_token,
+  base64url2jwk_public_key,
   checkandrenew_jwt_token,
+  resolveRenewalVerificationPlan,
   thorough_validate_jwt_token_be,
   brief_validate_jwt_token_be,
   generate_jwt_token_fromtoken,
-  verify_jwt_token,validate_jwt_token_be, generate_session_termination_token
+  verify_jwt_token,
+  validate_jwt_token_be,
+  generate_session_termination_token,
+  parseRoditJwtDurationSeconds,
+  resolveSessionExpirationUnix,
+  resolveCredentialExpirationUnix,
 };
