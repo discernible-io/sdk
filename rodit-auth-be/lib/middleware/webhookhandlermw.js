@@ -17,7 +17,144 @@ const { ulid } = require("ulid");
 const { sendError } = require("../../services/error-response");
 const nacl = require("tweetnacl");
 const stateManager = require("../blockchain/statemanager");
+const { sessionManager } = require("../auth/sessionmanager");
 const { authenticate_webhook } = require("../auth/authentication");
+
+// ---------------------------------------------------------------------------
+// Webhook identity + session helpers
+// ---------------------------------------------------------------------------
+// A webhook is a one-way POST whose only proof of origin is an Ed25519
+// signature. The signer's public key travels WITH the webhook: the implicit
+// account (hex of the key) and/or the base64url key are advertised in headers.
+// Verification uses that key; authorization then binds it to a live session
+// opened at login (see createWebhookAuthenticationMiddleware). There is nothing
+// to "resolve" from local state, so these are plain extraction helpers.
+
+const IMPLICIT_ACCOUNT_RE = /^[0-9a-f]{64}$/;
+
+function normalizeString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isImplicitAccount(tokenId) {
+  return IMPLICIT_ACCOUNT_RE.test(normalizeString(tokenId).toLowerCase());
+}
+
+function implicitAccountToBase64urlKey(tokenId) {
+  const hex = normalizeString(tokenId).toLowerCase();
+  if (!IMPLICIT_ACCOUNT_RE.test(hex)) return null;
+  return Buffer.from(hex, "hex").toString("base64url");
+}
+
+function base64urlKeyToImplicitAccount(base64urlKey) {
+  const key = normalizeString(base64urlKey);
+  if (!key) return null;
+  try {
+    const hex = Buffer.from(key, "base64url").toString("hex");
+    return IMPLICIT_ACCOUNT_RE.test(hex) ? hex : null;
+  } catch {
+    return null;
+  }
+}
+
+function headerValue(headers, name) {
+  if (!headers) return "";
+  const raw = headers[name] ?? headers[name.toLowerCase()];
+  if (typeof raw === "string") return raw.trim();
+  if (Array.isArray(raw) && raw.length > 0) return String(raw[0]).trim();
+  return "";
+}
+
+function parseWebhookPayload(rawPayload, parsedBody) {
+  if (parsedBody && typeof parsedBody === "object") return parsedBody;
+  if (typeof rawPayload === "string" && rawPayload.trim()) {
+    try {
+      return JSON.parse(rawPayload);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function sessionIdFromPayload(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const nested =
+    payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)
+      ? payload.data
+      : null;
+  return (
+    normalizeString(payload.session_id) ||
+    (nested && normalizeString(nested.session_id)) ||
+    ""
+  );
+}
+
+/**
+ * Extract the session id an inbound webhook is correlated with.
+ *
+ * The value carried in the SIGNED payload is authoritative because it is covered
+ * by the Ed25519 signature (payload + timestamp). The x-rodit-session-id header
+ * is only a pre-parse convenience mirror and is used as a fallback. Callers that
+ * need a trusted value should read this only after the signature has verified.
+ *
+ * @param {Object} params
+ * @param {Object} [params.headers] Incoming request headers.
+ * @param {string} [params.rawPayload] Raw request body (string).
+ * @param {Object} [params.parsedBody] Pre-parsed body, if available.
+ * @returns {string} The session id, or "" when none is present.
+ */
+function extractWebhookSessionId(params = {}) {
+  const { headers, rawPayload, parsedBody } = params;
+  const payload = parseWebhookPayload(rawPayload, parsedBody);
+  const fromPayload = sessionIdFromPayload(payload);
+  if (fromPayload) return fromPayload;
+  return headerValue(headers, "x-rodit-session-id");
+}
+
+/**
+ * Extract the Ed25519 public key an inbound webhook must be verified against,
+ * taken directly from the identity the webhook advertises. There is no local
+ * lookup: the key IS the identifier (the implicit account is the hex of the
+ * key). Authorization — proving that key belongs to a peer we logged in with —
+ * is enforced separately by binding to a live session.
+ *
+ * The signer key is carried in two mutually exclusive encodings of the same
+ * identity: `X-Rodit-Implicit-Account` (hex, authoritative and preferred) and
+ * `X-Rodit-Public-Key` (base64url, used only when the implicit account is
+ * absent). Both are emitted by `send_webhook`. The chosen encoding is reported
+ * in `source` so the decision is observable in logs.
+ *
+ * @param {Object} [headers] Incoming request headers.
+ * @returns {{ key: string|null, source: string, implicitAccount: string }}
+ */
+function extractWebhookSignerKey(headers) {
+  const advertisedKey = headerValue(headers, "x-rodit-public-key");
+  const implicit = headerValue(headers, "x-rodit-implicit-account");
+
+  if (isImplicitAccount(implicit)) {
+    const derived = implicitAccountToBase64urlKey(implicit);
+    // When the sender also advertises the raw key it must agree with the
+    // implicit account; a mismatch means a buggy or spoofing sender.
+    if (advertisedKey) {
+      const advertisedImplicit = base64urlKeyToImplicitAccount(advertisedKey);
+      if (advertisedImplicit && advertisedImplicit !== implicit.toLowerCase()) {
+        return { key: null, source: "implicit_mismatch", implicitAccount: implicit.toLowerCase() };
+      }
+    }
+    return { key: derived, source: "implicit_account", implicitAccount: implicit.toLowerCase() };
+  }
+
+  // Only the raw key was advertised: its identity is derived from the key.
+  if (advertisedKey) {
+    const advertisedImplicit = base64urlKeyToImplicitAccount(advertisedKey);
+    if (advertisedImplicit) {
+      return { key: advertisedKey, source: "advertised_key", implicitAccount: advertisedImplicit };
+    }
+  }
+
+  return { key: null, source: "unresolved", implicitAccount: "" };
+}
 
 /**
  * Create a raw body parser middleware specifically for webhook endpoints
@@ -78,14 +215,15 @@ function createWebhookProcessingMiddleware() {
 }
 
 /**
- * Create middleware to attach the server's public key to the request
- * @param {Object} stateManager - State manager instance
+ * Create middleware that extracts the signer's public key from the inbound
+ * webhook and attaches it to the request for signature verification.
  * @returns {Function} Express middleware
  */
-function createPublicKeyMiddleware(stateManager) {
+function createPublicKeyMiddleware() {
   return async (req, res, next) => {
     const requestId = crypto.randomUUID();
     const logContext = {
+      component: "WebhookHandler",
       requestId,
       apiEndpoint: req.path,
       method: req.method,
@@ -95,17 +233,38 @@ function createPublicKeyMiddleware(stateManager) {
     };
 
     try {
-      // Check if this is a test environment where we should bypass signature verification      
-      // Get the peer public key from the state manager
-      const peerBase64urlJwkPublicKey = stateManager.getPeerBase64urlJwkPublicKey();
-      
-      // If the peer public key is not available and we're not in test mode, return an error
+      // The signer's public key travels with the webhook itself (implicit
+      // account = hex of the key). Extract it directly; each webhook is
+      // self-identifying, so reception is correct even when connected to many
+      // peers. Trust that the key belongs to a known peer is established later
+      // by binding to a session (createWebhookAuthenticationMiddleware).
+      const resolution = extractWebhookSignerKey(req.headers);
+      const peerBase64urlJwkPublicKey = resolution.key;
+
+      // Correlate to the originating session (authoritative once the signature
+      // verifies downstream, since it is carried in the signed payload). Exposed
+      // on the request so handlers can link the webhook to a known session.
+      req.webhook_session_id = extractWebhookSessionId({
+        headers: req.headers,
+        rawPayload: req.rawBody,
+        parsedBody: req.body,
+      });
+
+      if (peerBase64urlJwkPublicKey) {
+        logger.debugWithContext("Extracted webhook signer key", {
+          ...logContext,
+          source: resolution.source,
+          implicitAccount: resolution.implicitAccount
+        });
+      }
+
+      // If the public key is not available and we're not in test mode, return an error
       if (!peerBase64urlJwkPublicKey) {
-        logger.warnWithContext("Peer public key not available in state manager", logContext);
+        logger.warnWithContext("Webhook signer public key not present in request", logContext);
         
         // On main, we need the key
         if (isStrictEnvironment()) {
-          logger.errorWithContext("Peer public key not available in main environment", logContext);
+          logger.errorWithContext("Webhook signer public key not present in main environment", logContext);
           return sendError(res, {
             statusCode: 500,
             requestId,
@@ -115,15 +274,15 @@ function createPublicKeyMiddleware(stateManager) {
         }
         
         // In development or test, we'll continue without the key and skip verification
-        logger.infoWithContext("Continuing without peer public key in non-main environment", {
+        logger.infoWithContext("Continuing without webhook signer key in non-main environment", {
           ...logContext,
           environment: getNodeEnv()
         });
       }
       
       if (peerBase64urlJwkPublicKey) {
-        // Log that we're using the peer public key
-        logger.infoWithContext("Using peer public key from state manager", {
+        // Log that we're using the signer key advertised by the webhook
+        logger.infoWithContext("Using webhook signer public key from request", {
           ...logContext,
           keyFormat: "JWK",
           keyFound: true
@@ -188,6 +347,7 @@ function createWebhookAuthenticationMiddleware() {
   return async (req, res, next) => {
     const requestId = crypto.randomUUID();
     const logContext = {
+      component: "WebhookHandler",
       requestId,
       apiEndpoint: req.path,
       method: req.method,
@@ -306,6 +466,110 @@ function createWebhookAuthenticationMiddleware() {
         });
       }
 
+      // Authorization gate (signer <-> session binding).
+      //
+      // A valid signature only proves the sender holds the private key for the
+      // identity it advertised; it does NOT prove that identity is a peer we
+      // established a session with. Bind the verified signer to a live session
+      // opened at login: the session_id carried in the (now signature-verified)
+      // payload must map to an active session whose ownerId equals the signer's
+      // implicit account (hex of the public key the signature verified against).
+      // This rejects a made-up key that is internally consistent but unrelated
+      // to any peer we logged in with.
+      const bypassSessionBinding =
+        String(config.get('NODE_ENV', 'development')).toLowerCase() === 'test' ||
+        config.get('SECURITY_OPTIONS.BYPASS_WEBHOOK_VERIFICATION', false) === true;
+
+      if (!bypassSessionBinding) {
+        const sessionId =
+          req.webhook_session_id ||
+          extractWebhookSessionId({
+            headers: req.headers,
+            rawPayload: req.rawBody,
+            parsedBody: req.body,
+          });
+
+        if (!sessionId) {
+          logger.warnWithContext("Webhook rejected: not associated with a session", {
+            ...logContext,
+            result: 'failure',
+            reason: 'missing_session_id',
+          });
+          return sendError(res, {
+            statusCode: 401,
+            requestId,
+            code: 'WEBHOOK_SESSION_REQUIRED',
+            message: "Webhook is not associated with a session",
+          });
+        }
+
+        // Derive the verified signer's implicit account from the exact public
+        // key the signature was checked against.
+        let signerImplicitAccount = '';
+        try {
+          signerImplicitAccount = Buffer.from(publicKeyBase64url, 'base64url')
+            .toString('hex')
+            .toLowerCase();
+        } catch (implicitError) {
+          signerImplicitAccount = '';
+        }
+
+        if (!sessionManager || typeof sessionManager.getSession !== 'function') {
+          logger.errorWithContext("Session manager unavailable for webhook binding check", logContext);
+          return sendError(res, {
+            statusCode: 500,
+            requestId,
+            code: "SERVER_CONFIG_ERROR",
+            message: "Server configuration error",
+          });
+        }
+
+        const session = await sessionManager.getSession(sessionId);
+        const nowSec = Math.floor(Date.now() / 1000);
+        const sessionLive =
+          !!session &&
+          (session.status ? session.status === 'active' : true) &&
+          (!session.expiresAt || session.expiresAt > nowSec);
+
+        if (!sessionLive) {
+          logger.warnWithContext("Webhook rejected: session unknown or expired", {
+            ...logContext,
+            result: 'failure',
+            reason: 'session_not_live',
+            sessionId,
+          });
+          return sendError(res, {
+            statusCode: 401,
+            requestId,
+            code: 'WEBHOOK_SESSION_INVALID',
+            message: "Webhook session is unknown or expired",
+          });
+        }
+
+        const sessionOwner = String(session.ownerId || '').toLowerCase();
+        if (!sessionOwner || !signerImplicitAccount || sessionOwner !== signerImplicitAccount) {
+          logger.warnWithContext("Webhook rejected: signer does not match session owner", {
+            ...logContext,
+            result: 'failure',
+            reason: 'signer_session_mismatch',
+            sessionId,
+            signerImplicitAccount,
+            sessionOwner,
+          });
+          return sendError(res, {
+            statusCode: 403,
+            requestId,
+            code: 'WEBHOOK_SIGNER_SESSION_MISMATCH',
+            message: "Webhook signer is not the peer bound to this session",
+          });
+        }
+
+        // Expose the validated binding for downstream handlers.
+        req.webhook_session = session;
+        req.webhook_session_id = sessionId;
+        req.webhook_signer_implicit_account = signerImplicitAccount;
+      }
+
       logger.infoWithContext("Webhook authenticated successfully", {
         ...logContext,
         authDuration: authResult.duration,
@@ -401,15 +665,18 @@ function processWebhookEvent(req, logContext = {}) {
 }
 
 /**
- * Create a complete webhook handler for Express
- * @param {Object} stateManager - State manager instance
- * @param {Object} configuration - Configuration configuration
+ * Create a complete webhook handler for Express.
+ *
+ * The middleware is self-contained: the signer key is extracted from each
+ * inbound webhook and the shared state manager / session manager are imported
+ * directly, so no constructor arguments are required.
+ *
  * @returns {Object} Webhook handler with middleware and utilities
  */
-function createWebhookHandler(stateManager, configuration = {}) {
+function createWebhookHandler() {
   const rawBodyParser = createRawBodyParser();
   const webhookProcessingMiddleware = createWebhookProcessingMiddleware();
-  const publicKeyMiddleware = createPublicKeyMiddleware(stateManager);
+  const publicKeyMiddleware = createPublicKeyMiddleware();
   const authenticationMiddleware = createWebhookAuthenticationMiddleware();
   
   return {
@@ -462,12 +729,73 @@ function createWebhookHandler(stateManager, configuration = {}) {
 }
 
 /**
+ * Resolve the session id to stamp into an outbound webhook so the receiver can
+ * correlate it with the session opened at login.
+ *
+ * Resolution order:
+ *   1. options.sessionId — explicit override (most reliable for multi-peer).
+ *   2. req.user.session_id — the authenticated peer JWT context (set by the auth
+ *      middleware when replying to a request).
+ *   3. req.session_id — session id attached directly to the request.
+ *   4. Session storage — the JWT issuer (login_client) keeps a session per peer
+ *      keyed by that peer's roditId. Given the recipient's identity
+ *      (options.sessionRoditId / options.peerTokenId) we resolve the shared
+ *      session id from the SessionManager without needing any request context.
+ *
+ * @param {Object} options
+ * @param {Object} req
+ * @returns {Promise<string>} The resolved session id, or "" if none.
+ */
+async function resolveOutboundWebhookSessionId(options = {}, req = null) {
+  const explicit =
+    (options && typeof options.sessionId === "string" && options.sessionId.trim()) ||
+    (req && req.user && typeof req.user.session_id === "string" && req.user.session_id.trim()) ||
+    (req && typeof req.session_id === "string" && req.session_id.trim()) ||
+    "";
+  if (explicit) return explicit;
+
+  const roditId =
+    (options && typeof options.sessionRoditId === "string" && options.sessionRoditId.trim()) ||
+    (options && typeof options.peerTokenId === "string" && options.peerTokenId.trim()) ||
+    "";
+  if (!roditId || !sessionManager || typeof sessionManager.findSessionsByRoditId !== "function") {
+    return "";
+  }
+
+  try {
+    const sessions = await sessionManager.findSessionsByRoditId(roditId);
+    if (!Array.isArray(sessions) || sessions.length === 0) return "";
+    const nowSec = Math.floor(Date.now() / 1000);
+    const usable = sessions
+      .filter((s) => s && s.id)
+      // Stamp the session the recipient holds *as a client*, i.e. one this peer
+      // issued as a server. Exclude sessions this peer merely recorded as a
+      // client (origin === "client") so mutual peers don't cross-stamp.
+      .filter((s) => (s.origin ? s.origin !== "client" : true))
+      .filter((s) => (s.status ? s.status === "active" : true))
+      .filter((s) => !s.expiresAt || s.expiresAt > nowSec)
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+    return usable.length > 0 ? String(usable[0].id) : "";
+  } catch (sessionLookupError) {
+    logger.debugWithContext("Session storage lookup for webhook failed", {
+      component: "WebhookHandler",
+      method: "send_webhook",
+      roditId,
+      error: sessionLookupError.message
+    });
+    return "";
+  }
+}
+
+/**
     * Send a webhook notification with comprehensive logging
     *
     * @param {Object} data - Webhook envelope. Expected shape: { event: string, data?: any, isError?: boolean }
     * @param {Object} req - Express request object (optional)
     * @param {Object} options - Options object (optional)
     * @param {string} options.endpoint - Target endpoint path (e.g., '/webhook', '/hooks/wake', '/hooks/agent'). Defaults to '/webhook'
+    * @param {string} [options.sessionId] - Explicit session id to correlate this webhook with
+    * @param {string} [options.sessionRoditId] - Recipient peer roditId; used to resolve the session id from session storage
     * @returns {Promise<Object>} Webhook delivery result with requestId
     */
    async function send_webhook(data, req = null, options = {}) {
@@ -632,6 +960,12 @@ function createWebhookHandler(stateManager, configuration = {}) {
          };
        }
        
+       // Correlate this webhook with an existing session when one is known.
+       // Resolved from the explicit option, the authenticated request context,
+       // or session storage (by recipient roditId). Included in the SIGNED
+       // payload below so the receiver can trust and match it.
+       const webhookSessionId = await resolveOutboundWebhookSessionId(options, req);
+
        // Create the payload object
        const payloadObj = {
          event,
@@ -639,6 +973,9 @@ function createWebhookHandler(stateManager, configuration = {}) {
          isError,
          requestId,
        };
+       if (webhookSessionId) {
+         payloadObj.session_id = webhookSessionId;
+       }
        
        // Create the payload with consistent JSON formatting
        // Sort keys to ensure canonical representation regardless of object creation order
@@ -760,15 +1097,41 @@ function createWebhookHandler(stateManager, configuration = {}) {
          signatureHex: signature_hex_ofpayload
        });
    
-       // Prepare headers for the webhook request
-       // Only include webhook-specific authentication headers (digital signature)
-       // No API bearer tokens - webhook security relies on cryptographic signatures
-       const headers = {
-         "Content-Type": "application/json",
-         "X-Signature": signature_hex_ofpayload,
-         "X-Timestamp": timestamp.toString(),
-         "X-Request-ID": requestId
-       };
+      // Prepare headers for the webhook request
+      // Only include webhook-specific authentication headers (digital signature)
+      // No API bearer tokens - webhook security relies on cryptographic signatures
+      const headers = {
+        "Content-Type": "application/json",
+        "X-Signature": signature_hex_ofpayload,
+        "X-Timestamp": timestamp.toString(),
+        "X-Request-ID": requestId
+      };
+
+      // Advertise the signer identity so multi-peer receivers can resolve the
+      // correct verification key deterministically instead of relying on a
+      // single mutable "current peer" slot. The implicit account is the hex of
+      // the signing Ed25519 public key and is authoritative on its own.
+      try {
+        if (publicKey) {
+          headers["X-Rodit-Public-Key"] = publicKey;
+          headers["X-Rodit-Implicit-Account"] = Buffer.from(publicKey, "base64url").toString("hex");
+        }
+        const ownTokenId = config_own_rodit?.own_rodit?.token_id;
+        if (ownTokenId) {
+          headers["X-Rodit-Token-Id"] = String(ownTokenId);
+        }
+      } catch (identityHeaderError) {
+        logger.debugWithContext("Unable to attach signer identity headers", {
+          ...baseContext,
+          error: identityHeaderError.message
+        });
+      }
+
+      // Mirror the (signed) session id into a header for pre-parse correlation.
+      // The signed payload value remains authoritative; this is convenience only.
+      if (webhookSessionId) {
+        headers["X-Rodit-Session-Id"] = webhookSessionId;
+      }
        
        // Log the exact headers being sent
        logger.debugWithContext("Webhook request headers", {
@@ -1377,7 +1740,14 @@ module.exports = {
   processWebhookEvent,
   createWebhookHandler,
   send_webhook,
-  
+
+  // Webhook identity + session helpers
+  extractWebhookSignerKey,
+  extractWebhookSessionId,
+  isImplicitAccount,
+  implicitAccountToBase64urlKey,
+  base64urlKeyToImplicitAccount,
+
   // Added exports from eventhandler.js
   WebhookEventHandler,
   TestConfigUpdateHandler,

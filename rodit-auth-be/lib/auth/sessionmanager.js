@@ -532,7 +532,10 @@ class SessionManager {
       const sessionId = this._generateSessionId(sessionData.roditId);
       const now = Math.floor(Date.now() / 1000);
       
-      // Create the session object
+      // Create the session object.
+      // origin distinguishes sessions this peer *issued* as a server ('server')
+      // from sessions a client peer *opened* and recorded ('client', see
+      // recordSession). Both live in the same store.
       const session = {
         id: sessionId,
         roditId: sessionData.roditId,
@@ -541,6 +544,7 @@ class SessionManager {
         expiresAt: sessionData.expiresAt,
         lastAccessedAt: now,
         status: 'active',
+        origin: sessionData.origin || 'server',
         metadata: sessionData.metadata || {},
       };
       
@@ -587,6 +591,125 @@ class SessionManager {
     }
   }
 
+
+  /**
+   * Record an externally-issued session under its own id.
+   *
+   * Unlike createSession (which mints a new id when this peer, acting as a
+   * server, issues a JWT), recordSession stores a session using the id supplied
+   * by the issuer. It lets a *client* peer track the sessions it holds open with
+   * each server — the session_id embedded in every JWT it receives — using the
+   * same storage facility the server uses for its client peers. This makes
+   * multi-peer session tracking robust and lets an inbound webhook's session_id
+   * be cross-referenced to a live session (see hasSession).
+   *
+   * Idempotent upsert: recording an existing id refreshes it.
+   *
+   * @param {Object} sessionData
+   * @param {string} sessionData.id Issuer-provided session id
+   * @param {string} sessionData.roditId Peer (server) roditId this session is with
+   * @param {string} [sessionData.ownerId]
+   * @param {number} [sessionData.createdAt]
+   * @param {number} [sessionData.expiresAt]
+   * @param {string} [sessionData.status]
+   * @returns {Promise<Object|null>} The stored session, or null on error
+   */
+  async recordSession(sessionData) {
+    const requestId = ulid();
+    const baseContext = createLogContext("SessionManager", "recordSession", {
+      requestId,
+      sessionId: sessionData?.id
+    });
+
+    try {
+      if (!sessionData || !sessionData.id) {
+        throw new Error("recordSession requires sessionData.id");
+      }
+      if (!sessionData.roditId) {
+        throw new Error("recordSession requires sessionData.roditId");
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+      const session = {
+        id: sessionData.id,
+        roditId: sessionData.roditId,
+        ownerId: sessionData.ownerId,
+        createdAt: sessionData.createdAt || now,
+        expiresAt: sessionData.expiresAt,
+        lastAccessedAt: now,
+        status: sessionData.status || 'active',
+        origin: 'client',
+        metadata: sessionData.metadata || {},
+      };
+
+      await this.storage.set(session.id, session);
+
+      logger.debugWithContext("Recorded client-side session", {
+        ...baseContext,
+        roditId: session.roditId,
+        expiresAt: session.expiresAt,
+        origin: session.origin
+      });
+
+      return session;
+    } catch (error) {
+      logger.warnWithContext("Failed to record client-side session", {
+        ...baseContext,
+        error: error.message
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Quietly test whether a session id refers to a known, live (active,
+   * non-expired) session. Unlike getSession this does not log warnings or bump
+   * lastAccessedAt, so it is safe to call on every inbound webhook to
+   * cross-reference the carried session_id.
+   *
+   * @param {string} sessionId
+   * @returns {Promise<boolean>}
+   */
+  async hasSession(sessionId) {
+    if (!sessionId) return false;
+    try {
+      const session = await this.storage.get(sessionId);
+      if (!session) return false;
+      const now = Math.floor(Date.now() / 1000);
+      if (session.expiresAt && session.expiresAt <= now) return false;
+      return session.status ? session.status === 'active' : true;
+    } catch (error) {
+      logger.debugWithContext("hasSession lookup failed", {
+        component: "SessionManager",
+        method: "hasSession",
+        sessionId,
+        error: error.message
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Remove a session from storage (e.g. when a client peer logs out). Best
+   * effort; missing sessions are treated as already gone.
+   *
+   * @param {string} sessionId
+   * @returns {Promise<boolean>}
+   */
+  async forgetSession(sessionId) {
+    if (!sessionId) return false;
+    try {
+      return await this.storage.delete(sessionId);
+    } catch (error) {
+      logger.debugWithContext("forgetSession failed", {
+        component: "SessionManager",
+        method: "forgetSession",
+        sessionId,
+        error: error.message
+      });
+      return false;
+    }
+  }
 
   async getSession(sessionId) {
     const requestId = ulid();
@@ -1083,13 +1206,9 @@ class SessionManager {
 
 
   async findSessionsByRoditId(roditId) {
-    const requestId = ulid();
-    const startTime = Date.now();
-    const baseContext = createLogContext("SessionManager", "findSessionsByRoditId", { requestId, roditId });
-    
-    
+    const baseContext = createLogContext("SessionManager", "findSessionsByRoditId", { roditId });
+
     try {
-      let result = [];
       // Get sessions from storage
       let allSessions = [];
       if (typeof this.storage.getAll === 'function') {
@@ -1101,16 +1220,12 @@ class SessionManager {
           if (s) allSessions.push(s);
         }
       }
-      result = allSessions.filter(s => s && s.roditId === roditId);
-      
-      const duration = Date.now() - startTime;
-      
-      
-      return result;
+      return allSessions.filter(s => s && s.roditId === roditId);
     } catch (error) {
-      const duration = Date.now() - startTime;
-          
-      
+      logger.debugWithContext("findSessionsByRoditId lookup failed", {
+        ...baseContext,
+        error: error.message
+      });
       return [];
     }
   }

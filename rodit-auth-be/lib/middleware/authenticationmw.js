@@ -2160,6 +2160,9 @@ async function login_portal(config_own_rodit, port, options = {}) {
 
         const peer_base64url_jwk_public_key = Buffer.from(peer_rodit.owner_id, "hex").toString("base64url");
         await stateManager.setPeerBase64urlJwkPublicKey(peer_base64url_jwk_public_key);
+        // Inbound webhooks are verified against the key each webhook advertises
+        // and authorized by binding to the session opened here, so there is no
+        // per-peer key registry to populate.
 
         logger.debug("Peer public key set in state manager", {
           component: "AuthenticationService",

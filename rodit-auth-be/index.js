@@ -61,6 +61,10 @@ function sessionFieldsFromJwt(token) {
       sessionId: payload.session_id,
       expiresAt: payload.session_exp,
       createdAt: payload.session_iat,
+      // Identity of the peer (server) that issued this JWT, so the client can
+      // record the session keyed by the server it opened it with.
+      peerRoditId: payload.rodit_id,
+      peerOwnerId: payload.rodit_owner,
     };
   } catch (_error) {
     return {};
@@ -281,32 +285,53 @@ class RoditClient {
    * @param {Object} [req] - Express request (for deriving peer webhook URL and headers)
    * @returns {Promise<Object>} Webhook result
    */
-  async sendWebhookToEndpoint(data, endpoint, req) {
+  async sendWebhookToEndpoint(data, endpoint, req, options = {}) {
     if (webhookHandler.send_webhook) {
-      return webhookHandler.send_webhook(data, req, { endpoint });
+      return webhookHandler.send_webhook(data, req, this._buildWebhookOptions(endpoint, options));
     }
     throw new Error('Webhook functionality not available');
+  }
+
+  /**
+   * Build the options passed to the underlying send_webhook. Defaults the
+   * session id to this client's own session (set at login_server) so a peer that
+   * initiated the login stamps the shared session id automatically. Callers can
+   * override with options.sessionId or resolve from storage via
+   * options.sessionRoditId.
+   * @private
+   * @param {string} endpoint
+   * @param {Object} [options]
+   * @returns {Object}
+   */
+  _buildWebhookOptions(endpoint, options = {}) {
+    const merged = { ...options, endpoint };
+    if (merged.sessionId == null && this.sessionId) {
+      merged.sessionId = this.sessionId;
+    }
+    return merged;
   }
 
   /**
    * Send webhook (backward compatibility alias)
    * @param {Object} data - Webhook payload object
    * @param {Object} [req] - Express request (for deriving peer webhook URL and headers)
+   * @param {Object} [options] - Webhook options (sessionId, sessionRoditId)
    * @returns {Promise<Object>} Webhook result
    */
-  async send_webhook(data, req) {
-    return this.sendWebhook(data, req);
+  async send_webhook(data, req, options = {}) {
+    return this.sendWebhook(data, req, options);
   }
 
   /**
    * Send webhook to default /webhook endpoint
    * @param {Object} data - Webhook payload object
    * @param {Object} [req] - Express request (optional)
+   * @param {Object} [options] - Webhook options (sessionId, sessionRoditId)
    * @returns {Promise<Object>} Webhook result
    */
-  async sendWebhook(data, req) {
+  async sendWebhook(data, req, options = {}) {
     if (webhookHandler.send_webhook) {
-      return webhookHandler.send_webhook(data, req, { endpoint: '/webhook' });
+      return webhookHandler.send_webhook(data, req, this._buildWebhookOptions('/webhook', options));
     }
     throw new Error('Webhook functionality not available');
   }
@@ -316,10 +341,11 @@ class RoditClient {
    * Trigger immediate heartbeat (enqueues system event for main session)
    * @param {Object} data - Webhook payload
    * @param {Object} [req] - Express request
+   * @param {Object} [options] - Webhook options (sessionId, sessionRoditId)
    * @returns {Promise<Object>} Webhook result
    */
-  async sendWakeHook(data, req) {
-    return this.sendWebhookToEndpoint(data, '/hooks/wake', req);
+  async sendWakeHook(data, req, options = {}) {
+    return this.sendWebhookToEndpoint(data, '/hooks/wake', req, options);
   }
 
   /**
@@ -327,10 +353,11 @@ class RoditClient {
    * Run isolated agent task with optional reply to messaging channels
    * @param {Object} data - Webhook payload
    * @param {Object} [req] - Express request
+   * @param {Object} [options] - Webhook options (sessionId, sessionRoditId)
    * @returns {Promise<Object>} Webhook result
    */
-  async sendAgentHook(data, req) {
-    return this.sendWebhookToEndpoint(data, '/hooks/agent', req);
+  async sendAgentHook(data, req, options = {}) {
+    return this.sendWebhookToEndpoint(data, '/hooks/agent', req, options);
   }
 
   /**
@@ -880,14 +907,31 @@ class RoditClient {
       sessionId: this.sessionData?.id
     });
     
+    // Forget the recorded session so it no longer cross-references webhooks.
+    if (this.sessionId) {
+      Promise.resolve(sessionManager.forgetSession(this.sessionId)).catch(() => {});
+    }
+
     // Clear session data
     this.sessionData = null;
     this.jwt_token = null;
+    this.sessionId = null;
     
     // Also clear JWT token from stateManager
     this.stateManager.setJwtToken(null);
     
     return true;
+  }
+
+  /**
+   * Check whether a session id refers to a live session this client currently
+   * holds open. Use this to cross-reference the session_id carried by an inbound
+   * webhook against the sessions opened at login.
+   * @param {string} sessionId
+   * @returns {Promise<boolean>}
+   */
+  async isKnownSession(sessionId) {
+    return sessionManager.hasSession(sessionId);
   }
   
   
@@ -1124,14 +1168,42 @@ class RoditClient {
         const fromJwt = sessionFieldsFromJwt(loginResult.jwt_token);
         const nowSec = Math.floor(Date.now() / 1000);
         this.sessionId = fromJwt.sessionId || ulid();
+        const sessionCreatedAt = fromJwt.createdAt ?? nowSec;
+        const sessionExpiresAt =
+          fromJwt.expiresAt ?? nowSec + config.getDefaultJwtDurationSeconds();
         this.setSessionData({
           id: this.sessionId,
-          createdAt: fromJwt.createdAt ?? nowSec,
-          expiresAt:
-            fromJwt.expiresAt ??
-            nowSec + config.getDefaultJwtDurationSeconds(),
+          createdAt: sessionCreatedAt,
+          expiresAt: sessionExpiresAt,
           status: 'active'
         });
+
+        // Record the opened session in the shared SessionManager, keyed by the
+        // server we logged into. This mirrors how a server stores sessions for
+        // its client peers, so a client connected to many servers can
+        // cross-reference an inbound webhook's session_id to a live session
+        // (multi-peer safe, unlike the single this.sessionId slot).
+        try {
+          const serverRoditId =
+            fromJwt.peerRoditId || config_own_rodit?.own_rodit?.token_id || null;
+          if (serverRoditId) {
+            await sessionManager.recordSession({
+              id: this.sessionId,
+              roditId: serverRoditId,
+              ownerId: fromJwt.peerOwnerId,
+              createdAt: sessionCreatedAt,
+              expiresAt: sessionExpiresAt,
+              status: 'active'
+            });
+          }
+        } catch (recordErr) {
+          logger.debug('Unable to record client session for webhook correlation', {
+            component: 'RoditClient',
+            method: 'login_server',
+            requestId,
+            error: recordErr.message
+          });
+        }
       }
 
       const duration = Date.now() - startTime;
@@ -1859,6 +1931,10 @@ module.exports = {
   generate_jwt_token,
   validatepermissions,
   webhookHandler,
+  // Webhook identity + session helpers (key travels with the webhook; trust is
+  // established by binding the verified signer to a session opened at login)
+  extractWebhookSignerKey: webhookHandler.extractWebhookSignerKey,
+  extractWebhookSessionId: webhookHandler.extractWebhookSessionId,
   versioningMiddleware,
   loggingmw,
   ratelimitmw,
