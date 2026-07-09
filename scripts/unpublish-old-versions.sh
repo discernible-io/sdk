@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
 set -u
 
-DEFAULT_PACKAGE_NAMES="@rodit/rodit-auth-be @rodit/rodit-auth-fe"
+DEFAULT_PACKAGE_NAMES="@rodit/rodit-auth-be @rodit/rodit-auth-fe @rodit/verify-hola"
 PACKAGE_NAMES="${PACKAGE_NAMES:-${PACKAGE_NAME:-$DEFAULT_PACKAGE_NAMES}}"
 REGISTRY="${REGISTRY:-https://registry.npmjs.org/}"
 MODE="dry-run"
+INCLUDE_LATEST="false"
 otp=""
 
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/unpublish-old-versions.sh [--execute]
+  scripts/unpublish-old-versions.sh [--execute] [--all]
 
 Environment:
   PACKAGE_NAMES  Space-separated packages to unpublish old versions from
-                 (default: @rodit/rodit-auth-be @rodit/rodit-auth-fe)
+                 (default: @rodit/rodit-auth-be @rodit/rodit-auth-fe @rodit/verify-hola)
   PACKAGE_NAME   Single package override for backwards compatibility
   REGISTRY       npm registry URL (default: https://registry.npmjs.org/)
 
 By default this script only prints what it would unpublish.
 Pass --execute to run npm unpublish for every version except the current latest dist-tag.
+Pass --all to target every published version, including latest (removes the package entirely).
 
 The script is safe to re-run: each run fetches current registry metadata and only
 targets versions that still exist and are not the latest dist-tag. On --execute,
@@ -82,6 +84,10 @@ while [ "$#" -gt 0 ]; do
       MODE="dry-run"
       shift
       ;;
+    --all)
+      INCLUDE_LATEST="true"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -112,12 +118,13 @@ const metadata = JSON.parse(require("fs").readFileSync(0, "utf8"));
 console.log(metadata["dist-tags"]?.latest || metadata.version || "");
 ')"
 
-  versions_to_unpublish="$(printf '%s' "$metadata_json" | node -e '
+  versions_to_unpublish="$(printf '%s' "$metadata_json" | INCLUDE_LATEST="$INCLUDE_LATEST" node -e '
 const metadata = JSON.parse(require("fs").readFileSync(0, "utf8"));
 const versions = Array.isArray(metadata.versions) ? metadata.versions : [];
 const latest = metadata["dist-tags"]?.latest || metadata.version;
 if (!latest) throw new Error("Could not determine latest version");
-console.log(versions.filter((version) => version !== latest).join("\n"));
+const includeLatest = process.env.INCLUDE_LATEST === "true";
+console.log(versions.filter((version) => includeLatest || version !== latest).join("\n"));
 ')"
 
   if [ -z "$latest_version" ]; then
@@ -127,10 +134,18 @@ console.log(versions.filter((version) => version !== latest).join("\n"));
 
   echo "Package: $package_name"
   echo "Registry: $REGISTRY"
-  echo "Keeping latest: $latest_version"
+  if [ "$INCLUDE_LATEST" = "true" ]; then
+    echo "Mode: unpublish all versions (including latest $latest_version)"
+  else
+    echo "Keeping latest: $latest_version"
+  fi
 
   if [ -z "$versions_to_unpublish" ]; then
-    echo "No older versions found."
+    if [ "$INCLUDE_LATEST" = "true" ]; then
+      echo "No versions found."
+    else
+      echo "No older versions found."
+    fi
     return 0
   fi
 

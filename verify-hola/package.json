@@ -1,0 +1,45 @@
+{
+  "name": "@rodit/verify-hola",
+  "version": "0.1.0",
+  "description": "Verify HOLA lines and build passport reports via api.identyclaw.com (no JWT required for verify)",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "lib/report.js",
+  "bin": {
+    "verify-hola": "bin/verify-hola.js"
+  },
+  "dependencies": {
+    "@rodit/rodit-auth-be": "9.12.0",
+    "hi-base32": "^0.5.1",
+    "tweetnacl": "^1.0.3"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "README.md"
+  ],
+  "keywords": [
+    "identyclaw",
+    "hola",
+    "agent-identity",
+    "verification",
+    "near",
+    "rodit"
+  ],
+  "author": "Discernible IO",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/discernible-io/sdk.git",
+    "directory": "verify-hola"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test test/report.test.js"
+  }
+}

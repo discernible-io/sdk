@@ -10,6 +10,7 @@ const PACKAGE_SECTIONS = ["dependencies", "devDependencies", "optionalDependenci
 const PACKAGE_JSON_PATHS = [
   "rodit-auth-be/package.json",
   "rodit-auth-fe/package.json",
+  "verify-hola/package.json",
 ];
 
 function npmView(spec, field) {
