@@ -1,5 +1,7 @@
 # @rodit/verify-hola
 
+Part of the [Discernible IO SDK monorepo](../README.md).
+
 Verify-before-execute tooling for IdentyClaw HOLA lines.
 
 For NEAR account enrollment, see [gennearaccount](https://github.com/discernible-io/gennearaccount). For in-gateway HOLA tools, see [openclaw-identyclaw-plugin](https://github.com/discernible-io/openclaw-identyclaw-plugin).
@@ -21,7 +23,8 @@ From this monorepo (no npm publish required):
 ```bash
 export NEAR_RPC_URL="https://rpc.mainnet.fastnear.com"
 export NEAR_CONTRACT_ID="genaaaa-identyclaw-com.near"
-node examples/verify-before-execute/verify-hola-rpc.mjs "HOLA/..."
+node bin/verify-hola.js report "HOLA/..." --rpc \
+  --canonical-peer <lemuel-gulliver-lobby-tokenId>
 ```
 
 ## Alternative: IdentyClaw API path
@@ -84,3 +87,7 @@ const report = await buildHolaReportViaRpc(hola, {
 - [`references/verify-hola-recipes.md`](../references/verify-hola-recipes.md)
 - [`references/identity-verification-policy.md`](../references/identity-verification-policy.md) §1
 - MCP `doc:reference:verify-hola-recipes`
+
+---
+
+[discernible.io](https://www.discernible.io) · [identyclaw-agents](https://github.com/discernible-io/identyclaw-agents) · [discernible-io](https://github.com/discernible-io)

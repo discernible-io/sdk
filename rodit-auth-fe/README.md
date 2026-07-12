@@ -428,3 +428,7 @@ npm test
 ## License
 
 UNLICENSED - Copyright (c) 2026 Discernible IO. All rights reserved.
+
+---
+
+[discernible.io](https://www.discernible.io) · [identyclaw-agents](https://github.com/discernible-io/identyclaw-agents) · [discernible-io](https://github.com/discernible-io)

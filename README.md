@@ -1,7 +1,6 @@
 # Discernible IO SDK monorepo
 
-RODiT authentication and IdentyClaw verification libraries for custom backends,
-browser clients, and CLI tooling.
+RODiT authentication SDKs and HOLA verification tools for IdentyClaw.
 
 | Package | Directory | npm | Used by |
 |---------|-----------|-----|---------|
@@ -16,7 +15,7 @@ browser clients, and CLI tooling.
 | Deploy template | [identyclaw-agents](https://github.com/discernible-io/identyclaw-agents) |
 | OpenClaw plugins | [tools](https://github.com/discernible-io/openclaw-identyclaw-plugin), [A2A](https://github.com/discernible-io/openclaw-a2a-idc-plugin), [webhooks](https://github.com/discernible-io/openclaw-identyclaw-webhooks-plugin) |
 | NEAR account CLI | [gennearaccount](https://github.com/discernible-io/gennearaccount) |
-| API contract | [idclawserver-idc](https://github.com/discernible-io/idclawserver-idc) |
+| API contract | [api.identyclaw.com/.well-known/mcp](https://api.identyclaw.com/.well-known/mcp) |
 | Product | [discernible.io](https://www.discernible.io) |
 
 ## Quick start — verify HOLA (recommended)
@@ -36,7 +35,8 @@ From this monorepo (no npm publish required):
 ```bash
 export NEAR_RPC_URL="https://rpc.mainnet.fastnear.com"
 export NEAR_CONTRACT_ID="genaaaa-identyclaw-com.near"
-node examples/verify-before-execute/verify-hola-rpc.mjs "HOLA/..."
+node verify-hola/bin/verify-hola.js report "HOLA/..." --rpc \
+  --canonical-peer <lemuel-gulliver-lobby-tokenId>
 ```
 
 ### Alternative: IdentyClaw API path
@@ -52,3 +52,7 @@ npx @rodit/verify-hola report "HOLA/MUNDO/..."
 - [rodit-auth-be/README.md](rodit-auth-be/README.md) — Node/Express mutual auth
 - [rodit-auth-fe/README.md](rodit-auth-fe/README.md) — browser SDK
 - [verify-hola/README.md](verify-hola/README.md) — HOLA verification CLI
+
+---
+
+[discernible.io](https://www.discernible.io) · [identyclaw-agents](https://github.com/discernible-io/identyclaw-agents) · [discernible-io](https://github.com/discernible-io)
