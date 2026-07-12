@@ -1,5 +1,7 @@
 # @rodit/rodit-auth-fe
 
+Part of the [Discernible IO SDK monorepo](../README.md).
+
 A browser-based JavaScript SDK for RODiT (Routable Decentralized Identity Token) authentication and verification. This SDK enables secure authentication flows using NEAR Protocol blockchain, NEP-413 signatures, and JWT tokens for API access control.
 
 > **Note**: This is the **frontend/browser** version of the RODiT authentication SDK. For Node.js/backend environments, use [`@rodit/rodit-auth-be`](https://www.npmjs.com/package/@rodit/rodit-auth-be).

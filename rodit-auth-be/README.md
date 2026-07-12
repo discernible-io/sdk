@@ -37,92 +37,75 @@ A comprehensive Node.js SDK for implementing RODiT-based mutual authentication, 
 
 ### Installation
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - RUN COMMAND: npm install @rodit/rodit-auth-be
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+npm install @rodit/rodit-auth-be
 ```
 
 ### Basic Server Setup
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET express TO require('express')
-  - DO: const { RoditClient } = require('@rodit/rodit-auth-be')
-  - DO: const { setExpressSessionStore } = require('@rodit/rodit-auth-be/lib/auth/sessionmanager')
-  - DO: const { ulid } = require('ulid')
-  - SET session TO require('express-session')
-  - SET SQLiteStore TO require('connect-sqlite3')(session)
-  - SET app TO express()
-  - DO: let roditClient
-  - NOTE: Configure session storage BEFORE initializing RoditClient
-  - SET sessionStore TO new SQLiteStore({
-  - FIELD: db: 'sessions.db',
-  - FIELD: dir: './data',
-  - FIELD: table: 'sessions'
-  - DO: })
-  - DO: setExpressSessionStore(sessionStore)
-  - NOTE: Configure Express middleware
-  - DO: app.use(express.json())
-  - FIELD: app.use(express.urlencoded({ extended: false }))
-  - NOTE: Request context middleware
-  - DO: app.use((req, res, next) => {
-  - DO: req.requestId = req.headers['x-request-id'] || ulid()
-  - DO: req.startTime = Date.now()
-  - DO: next()
-  - DO: })
-  - NOTE: Server startup with SDK initialization
-  - DO: async function startServer() {
-  - DO: try {
-  - NOTE: Initialize RODiT client (use 'server' for server applications)
-  - SET roditClient TO await RoditClient.create('server')
-  - NOTE: Store client in app.locals for route access
-  - DO: app.locals.roditClient = roditClient
-  - NOTE: Get logger and other services from client
-  - SET logger TO roditClient.getLogger()
-  - SET config TO roditClient.getConfig()
-  - SET loggingmw TO roditClient.getLoggingMiddleware()
-  - NOTE: Apply logging middleware
-  - DO: app.use(loggingmw)
-  - NOTE: Create authentication middleware
-  - SET authenticate TO (req, res, next) => roditClient.authenticate(req, res, next)
-  - NOTE: Logout-specific auth allows signature-valid expired tokens for clean session closure
-  - SET authenticateLogout TO (req, res, next) => roditClient.authenticateForLogout(req, res, next)
-  - SET authorize TO (req, res, next) => roditClient.authorize(req, res, next)
-  - NOTE: Public routes
-  - DO: app.post('/api/login', (req, res) => {
-  - DO: req.logAction = 'login-attempt'
-  - RETURN roditClient.login_client(req, res)
-  - DO: })
-  - NOTE: Protected routes
-  - DO: app.post('/api/logout', authenticateLogout, (req, res) => {
-  - DO: req.logAction = 'logout-attempt'
-  - RETURN roditClient.logout_client(req, res)
-  - DO: })
-  - DO: app.get('/api/protected', authenticate, (req, res) => {
-  - FIELD: res.json({ message: 'Protected data', user: req.user })
-  - DO: })
-  - NOTE: Protected + authorized routes
-  - DO: app.use('/api/admin', authenticate, authorize, adminRoutes)
-  - SET port TO 3000
-  - DO: app.listen(port, () => {
-  - DO: logger.info(`RODiT Authentication Server running on port ${port}`)
-  - DO: })
-  - DO: } catch (error) {
-  - FIELD: console.error('Server initialization failed:', error)
-  - DO: process.exit(1)
-  - }
-  - }
-  - DO: startServer()
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const express = require('express');
+const { RoditClient } = require('@rodit/rodit-auth-be');
+const { setExpressSessionStore } = require('@rodit/rodit-auth-be/lib/auth/sessionmanager');
+const { ulid } = require('ulid');
+const session = require('express-session');
+const SQLiteStore = require('connect-sqlite3')(session);
+
+const app = express();
+
+// Configure session storage BEFORE initializing RoditClient
+const sessionStore = new SQLiteStore({
+  db: 'sessions.db',
+  dir: './data',
+  table: 'sessions',
+});
+setExpressSessionStore(sessionStore);
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+app.use((req, res, next) => {
+  req.requestId = req.headers['x-request-id'] || ulid();
+  req.startTime = Date.now();
+  next();
+});
+
+async function startServer() {
+  try {
+    const roditClient = await RoditClient.create('server');
+    app.locals.roditClient = roditClient;
+
+    const logger = roditClient.getLogger();
+    app.use(roditClient.getLoggingMiddleware());
+
+    const authenticate = (req, res, next) => roditClient.authenticate(req, res, next);
+    const authenticateLogout = (req, res, next) =>
+      roditClient.authenticateForLogout(req, res, next);
+    const authorize = (req, res, next) => roditClient.authorize(req, res, next);
+
+    app.post('/api/login', (req, res) => {
+      req.logAction = 'login-attempt';
+      roditClient.login_client(req, res);
+    });
+    app.post('/api/logout', authenticateLogout, (req, res) => {
+      req.logAction = 'logout-attempt';
+      roditClient.logout_client(req, res);
+    });
+    app.get('/api/protected', authenticate, (req, res) => {
+      res.json({ message: 'Protected data', user: req.user });
+    });
+    app.use('/api/admin', authenticate, authorize, adminRoutes);
+
+    const port = 3000;
+    app.listen(port, () => {
+      logger.info(`RODiT Authentication Server running on port ${port}`);
+    });
+  } catch (error) {
+    console.error('Server initialization failed:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
 ```
 
 ## Core Concepts
@@ -142,58 +125,46 @@ The SDK centers around the `RoditClient` class, which provides a unified interfa
 
 Store the initialized client in `app.locals` for consistent access across your application:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: In main app.js
-  - SET roditClient TO await RoditClient.create('server')
-  - DO: app.locals.roditClient = roditClient
-  - NOTE: In route modules
-  - SET router TO express.Router()
-  - DO: router.get('/data', (req, res) => {
-  - SET client TO req.app.locals.roditClient
-  - SET logger TO client.getLogger()
-  - DO: logger.info('Processing request', {
-  - FIELD: component: 'DataRoute',
-  - FIELD: userId: req.user?.id
-  - DO: })
-  - FIELD: res.json({ data: 'example' })
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// In main app.js
+const roditClient = await RoditClient.create('server')
+app.locals.roditClient = roditClient
+// In route modules
+const router = express.Router()
+router.get('/data', (req, res) => {
+  const client = req.app.locals.roditClient
+  const logger = client.getLogger()
+  logger.info('Processing request', {
+    component: 'DataRoute',
+    userId: req.user?.id
+  })
+res.json({ data: 'example' })
+})
 ```
 
 ### Authentication Middleware Pattern
 
 Create middleware functions that delegate to the RoditClient:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Create reusable middleware
-  - SET authenticate TO (req, res, next) => {
-  - SET client TO req.app.locals.roditClient
-  - CHECK CONDITION: if (!client) {
-  - RETURN res.status(503).json({ error: 'Authentication service unavailable' })
-  - }
-  - RETURN client.authenticate(req, res, next)
-  - DO: }
-  - SET authorize TO (req, res, next) => {
-  - SET client TO req.app.locals.roditClient
-  - CHECK CONDITION: if (!client) {
-  - RETURN res.status(503).json({ error: 'Authorization service unavailable' })
-  - }
-  - RETURN client.authorize(req, res, next)
-  - DO: }
-  - NOTE: Use in routes
-  - DO: app.get('/api/protected', authenticate, handler)
-  - DO: app.post('/api/admin', authenticate, authorize, adminHandler)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Create reusable middleware
+const authenticate = (req, res, next) => {
+  const client = req.app.locals.roditClient
+  if (!client) {
+    res.status(503).json({ error: 'Authentication service unavailable' })
+  }
+client.authenticate(req, res, next)
+}
+const authorize = (req, res, next) => {
+  const client = req.app.locals.roditClient
+  if (!client) {
+    res.status(503).json({ error: 'Authorization service unavailable' })
+  }
+client.authorize(req, res, next)
+}
+// Use in routes
+app.get('/api/protected', authenticate, handler)
+app.post('/api/admin', authenticate, authorize, adminHandler)
 ```
 
 ## Installation & Setup
@@ -201,117 +172,69 @@ OUTPUTS:
 ### Dependencies
 
 **Required:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - RUN COMMAND: npm install @rodit/rodit-auth-be express config winston
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+npm install @rodit/rodit-auth-be express config winston
 ```
 
 **Recommended for main:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - RUN COMMAND: npm install express-session connect-sqlite3
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+npm install express-session connect-sqlite3
 ```
 
 **Optional:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - RUN COMMAND: npm install node-vault  # For Vault-based credentials
-  - RUN COMMAND: npm install winston-loki  # For Grafana Loki logging
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+npm install node-vault  # For Vault-based credentials
+npm install winston-loki  # For Grafana Loki logging
 ```
 
 ### Environment Variables
 
 **Vault Configuration (main):**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export RODIT_NEAR_CREDENTIALS_SOURCE=vault
-  - FIELD: export VAULT_ENDPOINT=https://vault.example.com
-  - DO: export VAULT_ROLE_ID=your-role-id
-  - DO: export VAULT_SECRET_ID=your-secret-id
-  - DO: export VAULT_RODIT_KEYVALUE_PATH=secret/rodit
-  - DO: export SERVICE_NAME=your-service-name
-  - DO: export NEAR_CONTRACT_ID=discernible-io.near
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export RODIT_NEAR_CREDENTIALS_SOURCE=vault
+export VAULT_ENDPOINT=https://vault.example.com
+export VAULT_ROLE_ID=your-role-id
+export VAULT_SECRET_ID=your-secret-id
+export VAULT_RODIT_KEYVALUE_PATH=secret/rodit
+export SERVICE_NAME=your-service-name
+export NEAR_CONTRACT_ID=discernible-io.near
 ```
 
 **Application Configuration:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - FIELD: export NODE_ENV=main  # Environment: main, development, test
-  - FIELD: export LOG_LEVEL=info       # Logging: error, warn, info, debug, trace
-  - DO: export API_DEFAULT_OPTIONS_DB_PATH=/app/data/database.sqlite
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export NODE_ENV=main  # Environment: main, development, test
+export LOG_LEVEL=info       # Logging: error, warn, info, debug, trace
+export API_DEFAULT_OPTIONS_DB_PATH=/app/data/database.sqlite
 ```
 
 **Session Configuration:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - FIELD: export SESSION_STORAGE_TYPE=express-session  # Storage: memory, express, express-session
-  - DO: export SESSION_CLEANUP_INTERVAL=3600000      # Cleanup interval in milliseconds (1 hour)
-  - DO: export SESSION_TOKEN_RETENTION_PERIOD=604800 # Token retention in seconds (7 days)
-  - DO: export SESSION_VALIDATION_CACHE_TTL=5000     # Cache TTL in milliseconds (5 seconds)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export SESSION_STORAGE_TYPE=express-session  # Storage: memory, express, express-session
+export SESSION_CLEANUP_INTERVAL=3600000      # Cleanup interval in milliseconds (1 hour)
+export SESSION_TOKEN_RETENTION_PERIOD=604800 # Token retention in seconds (7 days)
+export SESSION_VALIDATION_CACHE_TTL=5000     # Cache TTL in milliseconds (5 seconds)
 ```
 
 **Logging Configuration:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - FIELD: export LOKI_URL=https://loki.example.com:3100
-  - FIELD: export LOKI_BASIC_AUTH=username:password
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export LOKI_URL=https://loki.example.com:3100
+export LOKI_BASIC_AUTH=username:password
 ```
 
 ### Configuration Files
 
 Create `config/default.json`:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - {
-  - FIELD: "NEAR_CONTRACT_ID": "discernible-io.near",
-  - FIELD: "SERVICE_NAME": "your-service",
-  - FIELD: "SECURITY_OPTIONS": {
-  - FIELD: "SILENT_LOGIN_FAILURES": false,
-  - FIELD: "SESSION_TTL_SECONDS": 5200  // server session lifetime from login (default in SDK)
-  - FIELD: "FALLBACK_JWT_DURATION": 3600  // access-token fallback when passport jwt_duration is invalid
-  - }
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```json
+{
+"NEAR_CONTRACT_ID": "discernible-io.near",
+"SERVICE_NAME": "your-service",
+"SECURITY_OPTIONS": {
+"SILENT_LOGIN_FAILURES": false,
+"SESSION_TTL_SECONDS": 5200
+"FALLBACK_JWT_DURATION": 3600
+}
+}
 ```
 
 ## Authentication
@@ -330,19 +253,12 @@ For API login documentation, use **`accountid`** with HTTP `POST /api/login`. Th
 | `base64url_signature` | Ed25519 detached signature (base64url) over `accountid + timestamp_iso` |
 | `accountid` | 64-hex implicit NEAR account login identifier |
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Implicit account login
-  - {
-  - FIELD: "accountid": "<64-char-hex>",
-  - FIELD: "timestamp": 1640995200,
-  - FIELD: "base64url_signature": "base64url-encoded-signature"
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```json
+{
+  "accountid": "<64-char-hex>",
+  "timestamp": 1640995200,
+  "base64url_signature": "base64url-encoded-signature"
+}
 ```
 
 Use **`base64url_signature`** in login payloads for API login examples.
@@ -351,20 +267,11 @@ Rejected keys (HTTP 400, `LOGIN_PAYLOAD_DEPRECATED`): **`signature`** and **`acc
 
 #### Server Response
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Success (200)
-  - {
-  - FIELD: "jwt_token": "<jwt-token>",
-  - FIELD: "requestId": "01HQXYZ123ABC"
-  - }
-  - NOTE: Headers:
-  - NOTE: New-Token: <jwt>   (same token echoed for header-based clients)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```json
+{
+  "jwt_token": "<jwt-token>",
+  "requestId": "01HQXYZ123ABC"
+}
 ```
 
 #### Authentication Flow
@@ -384,102 +291,78 @@ Security hardening in current implementation:
 
 ### Login Implementation
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: routes/login.js
-  - SET express TO require('express')
-  - SET router TO express.Router()
-  - DO: router.post('/login', async (req, res) => {
-  - DO: req.logAction = 'login-attempt'
-  - SET client TO req.app.locals.roditClient
-  - CHECK CONDITION: if (!client) {
-  - RETURN res.status(503).json({ error: 'Authentication service unavailable' })
-  - }
-  - NOTE: Delegate to SDK's login_client method
-  - WAIT FOR: client.login_client(req, res)
-  - DO: })
-  - DO: module.exports = router
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// routes/login.js
+const express = require('express')
+const router = express.Router()
+router.post('/login', async (req, res) => {
+  req.logAction = 'login-attempt'
+  const client = req.app.locals.roditClient
+  if (!client) {
+    res.status(503).json({ error: 'Authentication service unavailable' })
+  }
+// Delegate to SDK's login_client method
+await client.login_client(req, res)
+})
+module.exports = router
 ```
 
 ### Logout Implementation
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Logout invalidates the JWT token and closes the session
-  - NOTE: Use logout-specific auth so signature-valid expired tokens can still logout.
-  - DO: router.post('/logout', authenticateLogout, async (req, res) => {
-  - DO: req.logAction = 'logout-attempt'
-  - SET client TO req.app.locals.roditClient
-  - CHECK CONDITION: if (!client) {
-  - RETURN res.status(503).json({ error: 'Authentication service unavailable' })
-  - }
-  - NOTE: Delegate to SDK's logout_client method
-  - WAIT FOR: client.logout_client(req, res)
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Logout invalidates the JWT token and closes the session
+// Use logout-specific auth so signature-valid expired tokens can still logout.
+router.post('/logout', authenticateLogout, async (req, res) => {
+  req.logAction = 'logout-attempt'
+  const client = req.app.locals.roditClient
+  if (!client) {
+    res.status(503).json({ error: 'Authentication service unavailable' })
+  }
+// Delegate to SDK's logout_client method
+await client.logout_client(req, res)
+})
 ```
 
 ### Protected Routes
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Require authentication for access
-  - DO: app.get('/api/data', authenticate, (req, res) => {
-  - NOTE: req.user contains authenticated user information
-  - SET logger TO req.app.locals.roditClient.getLogger()
-  - DO: logger.info('Protected route accessed', {
-  - FIELD: component: 'API',
-  - FIELD: userId: req.user.id,
-  - FIELD: roditId: req.user.roditId,
-  - FIELD: requestId: req.requestId
-  - DO: })
-  - DO: res.json({
-  - FIELD: message: 'Authenticated data',
-  - FIELD: user: req.user,
-  - FIELD: requestId: req.requestId
-  - DO: })
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Require authentication for access
+app.get('/api/data', authenticate, (req, res) => {
+  // req.user contains authenticated user information
+  const logger = req.app.locals.roditClient.getLogger()
+  logger.info('Protected route accessed', {
+    component: 'API',
+    userId: req.user.id,
+    roditId: req.user.roditId,
+    requestId: req.requestId
+  })
+res.json({
+  message: 'Authenticated data',
+  user: req.user,
+  requestId: req.requestId
+})
+})
 ```
 
 ### Authentication Middleware
 
 The `authenticate` middleware validates JWT tokens and populates `req.user`:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET authenticate TO (req, res, next) => {
-  - SET client TO req.app.locals.roditClient
-  - RETURN client.authenticate(req, res, next)
-  - DO: }
-  - NOTE: After successful authentication, req.user contains:
-  - NOTE: {
-  - NOTE: id: 'user-unique-id',
-  - NOTE: roditId: '01K4G3D95QF6NR0RSJK9WEK6KA',
-  - NOTE: aud: 'audience',
-  - NOTE: iss: 'issuer',
-  - NOTE: exp: 1640999999,
-  - NOTE: iat: 1640995200,
-  - NOTE: session_id: '01HQXYZ123ABC'
-  - NOTE: }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const authenticate = (req, res, next) => {
+  const client = req.app.locals.roditClient
+  client.authenticate(req, res, next)
+}
+// After successful authentication, req.user contains:
+// {
+  // id: 'user-unique-id',
+  // roditId: '01K4G3D95QF6NR0RSJK9WEK6KA',
+  // aud: 'audience',
+  // iss: 'issuer',
+  // exp: 1640999999,
+  // iat: 1640995200,
+  // session_id: '01HQXYZ123ABC'
+  // }
 ```
 
 ### Login Mode Control
@@ -509,50 +392,26 @@ The SDK provides configurable access control for RODiT authentication, allowing 
 #### Usage Examples
 
 **Default (Partner Only):**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: No configuration needed - this is the default
-  - NOTE: Only client-server authentication is accepted
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+// No configuration needed - this is the default
+// Only client-server authentication is accepted
 ```
 
 **Accept All Logins:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export SECURITY_OPTIONS_LOGIN_MODE=promiscuous
-  - NOTE: Both Partner and Peer logins are accepted
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export SECURITY_OPTIONS_LOGIN_MODE=promiscuous
+// Both Partner and Peer logins are accepted
 ```
 
 **Peer-to-Peer Only:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export SECURITY_OPTIONS_LOGIN_MODE=p2p
-  - NOTE: Only peer-to-peer authentication is accepted
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export SECURITY_OPTIONS_LOGIN_MODE=p2p
+// Only peer-to-peer authentication is accepted
 ```
 
 **Docker/Podman:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: podman run -e SECURITY_OPTIONS_LOGIN_MODE=partner ...
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+podman run -e SECURITY_OPTIONS_LOGIN_MODE=partner ...
 ```
 
 **GitHub Actions:**
@@ -563,37 +422,25 @@ Add repository variable:
 #### Logging and Monitoring
 
 **Successful Login:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - {
-  - FIELD: "level": "info",
-  - FIELD: "message": "PARTNER login verified successfully",
-  - FIELD: "verificationType": "PARTNER",
-  - FIELD: "loginMode": "partner",
-  - FIELD: "duration": 1234
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```json
+{
+  "level": "info",
+  "message": "PARTNER login verified successfully",
+  "verificationType": "PARTNER",
+  "loginMode": "partner",
+  "duration": 1234
+}
 ```
 
 **Rejected Login:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - {
-  - FIELD: "level": "warn",
-  - FIELD: "message": "PEER login rejected by LOGIN_MODE policy",
-  - FIELD: "verificationType": "PEER",
-  - FIELD: "loginMode": "partner",
-  - FIELD: "policyReason": "LOGIN_MODE=partner does not accept PEER logins"
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```json
+{
+  "level": "warn",
+  "message": "PEER login rejected by LOGIN_MODE policy",
+  "verificationType": "PEER",
+  "loginMode": "partner",
+  "policyReason": "LOGIN_MODE=partner does not accept PEER logins"
+}
 ```
 
 **Metrics:**
@@ -625,34 +472,28 @@ Look for the log message during authentication:
 
 Permissions are configured in your RODiT token metadata using the `permissioned_routes` field:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - {
-  - FIELD: "permissioned_routes": {
-  - FIELD: "entities": {
-  - FIELD: "/": {
-  - FIELD: "methods": "+0"
-  - DO: },
-  - FIELD: "/api/echo": {
-  - FIELD: "methods": "+0"
-  - DO: },
-  - FIELD: "/api/cruda/create": {
-  - FIELD: "methods": "+0"
-  - DO: },
-  - FIELD: "/api/cruda/list": {
-  - FIELD: "methods": "+0"
-  - DO: },
-  - FIELD: "/api/admin": {
-  - FIELD: "methods": "+0"
-  - }
-  - }
-  - }
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```json
+{
+  "permissioned_routes": {
+    "entities": {
+      "/": {
+        "methods": "+0"
+      },
+      "/api/echo": {
+        "methods": "+0"
+      },
+      "/api/cruda/create": {
+        "methods": "+0"
+      },
+      "/api/cruda/list": {
+        "methods": "+0"
+      },
+      "/api/admin": {
+        "methods": "+0"
+      }
+    }
+  }
+}
 ```
 
 **Permission Format:**
@@ -665,96 +506,72 @@ OUTPUTS:
 
 The `authorize` middleware validates that the authenticated user has permission to access the requested route:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET authenticate TO (req, res, next) => {
-  - RETURN req.app.locals.roditClient.authenticate(req, res, next)
-  - DO: }
-  - SET authorize TO (req, res, next) => {
-  - RETURN req.app.locals.roditClient.authorize(req, res, next)
-  - DO: }
-  - NOTE: Apply both authentication and authorization
-  - DO: app.use('/api/admin', authenticate, authorize, adminRoutes)
-  - NOTE: CRUDA endpoints with full protection
-  - DO: app.use('/api/cruda', authenticate, authorize, crudaRoutes)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const authenticate = (req, res, next) => {
+  req.app.locals.roditClient.authenticate(req, res, next)
+}
+const authorize = (req, res, next) => {
+  req.app.locals.roditClient.authorize(req, res, next)
+}
+// Apply both authentication and authorization
+app.use('/api/admin', authenticate, authorize, adminRoutes)
+// CRUDA endpoints with full protection
+app.use('/api/cruda', authenticate, authorize, crudaRoutes)
 ```
 
 ### Permission Enforcement
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Example: CRUDA routes with permission checking
-  - SET router TO express.Router()
-  - NOTE: All routes require authentication + authorization
-  - DO: router.post('/create', async (req, res) => {
-  - NOTE: User must have permission for POST /api/cruda/create
-  - DO: const { comment, author } = req.body
-  - NOTE: Create record in database
-  - SET result TO await db.run(
-  - DO: 'INSERT INTO comments (comment, author) VALUES (?, ?)',
-  - DO: [comment, author || req.user.roditId]
-  - DO: )
-  - FIELD: res.json({ id: result.lastID, requestId: req.requestId })
-  - DO: })
-  - DO: router.post('/list', async (req, res) => {
-  - NOTE: User must have permission for POST /api/cruda/list
-  - SET records TO await db.all('SELECT * FROM comments ORDER BY created_at DESC')
-  - FIELD: res.json({ records, requestId: req.requestId })
-  - DO: })
-  - DO: module.exports = router
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Example: CRUDA routes with permission checking
+const router = express.Router()
+// All routes require authentication + authorization
+router.post('/create', async (req, res) => {
+  // User must have permission for POST /api/cruda/create
+  const { comment, author } = req.body
+  // Create record in database
+  const result = await db.run(
+  'INSERT INTO comments (comment, author) VALUES (?, ?)',
+  [comment, author || req.user.roditId]
+  )
+  res.json({ id: result.lastID, requestId: req.requestId })
+})
+router.post('/list', async (req, res) => {
+  // User must have permission for POST /api/cruda/list
+  const records = await db.all('SELECT * FROM comments ORDER BY created_at DESC')
+  res.json({ records, requestId: req.requestId })
+})
+module.exports = router
 ```
 
 ### Dynamic Permission Checking
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Check permissions programmatically
-  - SET client TO req.app.locals.roditClient
-  - SET hasPermission TO client.isOperationPermitted('POST', '/api/admin/users')
-  - CHECK CONDITION: if (!hasPermission) {
-  - RETURN res.status(403).json({
-  - FIELD: error: 'Forbidden',
-  - FIELD: message: 'You do not have permission to access this resource',
-  - FIELD: requestId: req.requestId
-  - DO: })
-  - }
-  - NOTE: Proceed with operation
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Check permissions programmatically
+const client = req.app.locals.roditClient
+const hasPermission = client.isOperationPermitted('POST', '/api/admin/users')
+if (!hasPermission) {
+  res.status(403).json({
+    error: 'Forbidden',
+    message: 'You do not have permission to access this resource',
+    requestId: req.requestId
+  })
+}
+// Proceed with operation
 ```
 
 ### Permission Validation in Client Token Minting
 
 When minting client tokens via `/api/signclient`, the server validates that requested permissions are a subset of the server's own permissions:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Client requests these permissions:
-  - SET requestedPermissions TO {
-  - FIELD: "/": "+0",
-  - FIELD: "/api/echo": "+0",
-  - FIELD: "/api/cruda/create": "+0"
-  - DO: }
-  - NOTE: Server validates against its own permissioned_routes
-  - NOTE: If any requested route is not in server's config, request is rejected with HTTP 400
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Client requests these permissions:
+const requestedPermissions = {
+  "/": "+0",
+  "/api/echo": "+0",
+  "/api/cruda/create": "+0"
+}
+// Server validates against its own permissioned_routes
+// If any requested route is not in server's config, request is rejected with HTTP 400
 ```
 
 ## Session Management
@@ -856,15 +673,9 @@ Portal/outbound login token validation can skip session registration when `SECUR
 
 No configuration needed - works out of the box:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET client TO await RoditClient.create('server')
-  - NOTE: Uses InMemorySessionStorage by default
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const client = await RoditClient.create('server')
+// Uses InMemorySessionStorage by default
 ```
 
 **Pros:** Fast, zero configuration  
@@ -874,27 +685,21 @@ OUTPUTS:
 
 Persistent storage using SQLite database:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET express TO require('express')
-  - SET session TO require('express-session')
-  - SET SQLiteStore TO require('connect-sqlite3')(session)
-  - DO: const { RoditClient } = require('@rodit/rodit-auth-be')
-  - DO: const { setExpressSessionStore } = require('@rodit/rodit-auth-be/lib/auth/sessionmanager')
-  - NOTE: Configure BEFORE initializing RoditClient
-  - SET sessionStore TO new SQLiteStore({
-  - FIELD: db: 'sessions.db',
-  - FIELD: dir: './data',
-  - FIELD: table: 'sessions'
-  - DO: })
-  - DO: setExpressSessionStore(sessionStore)
-  - NOTE: Now initialize client
-  - SET client TO await RoditClient.create('server')
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const express = require('express')
+const session = require('express-session')
+const SQLiteStore = require('connect-sqlite3')(session)
+const { RoditClient } = require('@rodit/rodit-auth-be')
+const { setExpressSessionStore } = require('@rodit/rodit-auth-be/lib/auth/sessionmanager')
+// Configure BEFORE initializing RoditClient
+const sessionStore = new SQLiteStore({
+  db: 'sessions.db',
+  dir: './data',
+  table: 'sessions'
+})
+setExpressSessionStore(sessionStore)
+// Now initialize client
+const client = await RoditClient.create('server')
 ```
 
 **Pros:** Persistent across restarts, simple setup, uses existing database infrastructure  
@@ -902,40 +707,28 @@ OUTPUTS:
 
 #### 3. Redis Storage (For Multi-Server)
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - RUN COMMAND: npm install express-session connect-redis redis
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+npm install express-session connect-redis redis
 ```
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET session TO require('express-session')
-  - SET RedisStore TO require('connect-redis').default
-  - DO: const { createClient } = require('redis')
-  - DO: const { setExpressSessionStore } = require('@rodit/rodit-auth-be/lib/auth/sessionmanager')
-  - NOTE: Create Redis client
-  - SET redisClient TO createClient({
-  - FIELD: url: process.env.REDIS_URL || 'redis://127.0.0.1:6379'
-  - DO: })
-  - WAIT FOR: redisClient.connect()
-  - NOTE: Create Redis store
-  - SET redisStore TO new RedisStore({
-  - FIELD: client: redisClient,
-  - FIELD: prefix: 'rodit:sess:',
-  - FIELD: ttl: 86400 // 24 hours
-  - DO: })
-  - DO: setExpressSessionStore(redisStore)
-  - SET client TO await RoditClient.create('server')
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const session = require('express-session')
+const RedisStore = require('connect-redis').default
+const { createClient } = require('redis')
+const { setExpressSessionStore } = require('@rodit/rodit-auth-be/lib/auth/sessionmanager')
+// Create Redis client
+const redisClient = createClient({
+  url: process.env.REDIS_URL || 'redis://127.0.0.1:6379'
+})
+await redisClient.connect()
+// Create Redis store
+const redisStore = new RedisStore({
+  client: redisClient,
+  prefix: 'rodit:sess:',
+  ttl: 86400 // 24 hours
+})
+setExpressSessionStore(redisStore)
+const client = await RoditClient.create('server')
 ```
 
 **Pros:** Shared sessions across multiple servers, high performance  
@@ -954,14 +747,8 @@ The SDK supports configurable session storage via the `SESSION_STORAGE_TYPE` env
 - Sessions lost on server restart
 - Suitable for development or single-instance deployments
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export SESSION_STORAGE_TYPE=memory
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export SESSION_STORAGE_TYPE=memory
 ```
 
 **2. `"express"` or `"express-session"`**
@@ -971,84 +758,60 @@ OUTPUTS:
 - Can be overridden with `setExpressSessionStore()` for Redis, SQLite, etc.
 - Suitable for main with persistent storage
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export SESSION_STORAGE_TYPE=express-session
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export SESSION_STORAGE_TYPE=express-session
 ```
 
 #### Configuring Persistent Storage
 
 **SQLite Example:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET session TO require('express-session')
-  - SET SQLiteStore TO require('connect-sqlite3')(session)
-  - DO: const { setExpressSessionStore } = require('@rodit/rodit-auth-be/lib/auth/sessionmanager')
-  - NOTE: Configure BEFORE initializing RoditClient
-  - SET sessionStore TO new SQLiteStore({
-  - FIELD: db: 'sessions.db',
-  - FIELD: dir: './data',
-  - FIELD: table: 'sessions'
-  - DO: })
-  - DO: setExpressSessionStore(sessionStore)
-  - NOTE: Now initialize client
-  - SET client TO await RoditClient.create('server')
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const session = require('express-session')
+const SQLiteStore = require('connect-sqlite3')(session)
+const { setExpressSessionStore } = require('@rodit/rodit-auth-be/lib/auth/sessionmanager')
+// Configure BEFORE initializing RoditClient
+const sessionStore = new SQLiteStore({
+  db: 'sessions.db',
+  dir: './data',
+  table: 'sessions'
+})
+setExpressSessionStore(sessionStore)
+// Now initialize client
+const client = await RoditClient.create('server')
 ```
 
 **Redis Example:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET session TO require('express-session')
-  - SET RedisStore TO require('connect-redis').default
-  - DO: const { createClient } = require('redis')
-  - DO: const { setExpressSessionStore } = require('@rodit/rodit-auth-be/lib/auth/sessionmanager')
-  - SET redisClient TO createClient({
-  - FIELD: url: process.env.REDIS_URL || 'redis://127.0.0.1:6379'
-  - DO: })
-  - WAIT FOR: redisClient.connect()
-  - SET redisStore TO new RedisStore({
-  - FIELD: client: redisClient,
-  - FIELD: prefix: 'rodit:sess:',
-  - FIELD: ttl: 86400
-  - DO: })
-  - DO: setExpressSessionStore(redisStore)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const session = require('express-session')
+const RedisStore = require('connect-redis').default
+const { createClient } = require('redis')
+const { setExpressSessionStore } = require('@rodit/rodit-auth-be/lib/auth/sessionmanager')
+const redisClient = createClient({
+  url: process.env.REDIS_URL || 'redis://127.0.0.1:6379'
+})
+await redisClient.connect()
+const redisStore = new RedisStore({
+  client: redisClient,
+  prefix: 'rodit:sess:',
+  ttl: 86400
+})
+setExpressSessionStore(redisStore)
 ```
 
 #### Session Configuration Variables
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Storage backend type
-  - DO: export SESSION_STORAGE_TYPE=express-session
-  - NOTE: Cleanup interval (milliseconds) - how often to remove expired sessions
-  - DO: export SESSION_CLEANUP_INTERVAL=3600000  # 1 hour
-  - NOTE: Token retention period (seconds) - how long to keep closed sessions
-  - DO: export SESSION_TOKEN_RETENTION_PERIOD=604800  # 7 days
-  - NOTE: Validation cache TTL (milliseconds) - trades security for performance
-  - NOTE: Lower = more secure but more storage lookups
-  - NOTE: Higher = faster but longer window after logout where token may still work
-  - NOTE: Set to 0 to disable caching (always check session state)
-  - DO: export SESSION_VALIDATION_CACHE_TTL=5000  # 5 seconds
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+// Storage backend type
+export SESSION_STORAGE_TYPE=express-session
+// Cleanup interval (milliseconds) - how often to remove expired sessions
+export SESSION_CLEANUP_INTERVAL=3600000  # 1 hour
+// Token retention period (seconds) - how long to keep closed sessions
+export SESSION_TOKEN_RETENTION_PERIOD=604800  # 7 days
+// Validation cache TTL (milliseconds) - trades security for performance
+// Lower = more secure but more storage lookups
+// Higher = faster but longer window after logout where token may still work
+// Set to 0 to disable caching (always check session state)
+export SESSION_VALIDATION_CACHE_TTL=5000  # 5 seconds
 ```
 
 **Session Validation Cache:**
@@ -1061,63 +824,51 @@ The SDK caches token validation results to reduce storage lookups:
 - **Recommendation**: Keep default (5s) for most use cases
 - **High security**: Set to `0` to disable caching
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Get cache statistics
-  - SET sessionManager TO roditClient.getSessionManager()
-  - SET cacheStats TO sessionManager.getValidationCacheStats()
-  - FIELD: console.log('Cache stats:', cacheStats)
-  - NOTE: Output: { totalEntries: 10, validEntries: 8, expiredEntries: 2, cacheTTL: 5000, cacheEnabled: true }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Get cache statistics
+const sessionManager = roditClient.getSessionManager()
+const cacheStats = sessionManager.getValidationCacheStats()
+console.log('Cache stats:', cacheStats)
+// Output: { totalEntries: 10, validEntries: 8, expiredEntries: 2, cacheTTL: 5000, cacheEnabled: true }
 ```
 
 ### Session Operations
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Get session manager
-  - SET sessionManager TO roditClient.getSessionManager()
-  - NOTE: Get active session count
-  - SET activeCount TO await sessionManager.getActiveSessionCount()
-  - NOTE: Get storage information
-  - SET storageInfo TO await sessionManager.getStorageInfo()
-  - FIELD: console.log('Storage type:', storageInfo.type)
-  - FIELD: console.log('Session count:', storageInfo.sessionCount)
-  - NOTE: Enumerate sessions via storage
-  - SET allSessions TO await sessionManager.storage.getAll()
-  - NOTE: Or fallback using keys() + get()
-  - SET sessionIds TO await sessionManager.storage.keys()
-  - SET sessions TO []
-  - REPEAT: for (const id of sessionIds) {
-  - SET session TO await sessionManager.storage.get(id)
-  - CHECK CONDITION: if (session) sessions.push(session)
-  - }
-  - NOTE: Check if token is invalidated
-  - SET isInvalidated TO await sessionManager.isTokenInvalidated(jwtToken)
-  - NOTE: Get detailed invalidation info
-  - SET invalidationInfo TO await sessionManager.getTokenInvalidationInfo(jwtToken)
-  - CHECK CONDITION: if (invalidationInfo) {
-  - FIELD: console.log('Invalidation reason:', invalidationInfo.reason)
-  - FIELD: console.log('Invalidated at:', invalidationInfo.invalidatedAt)
-  - }
-  - NOTE: Manually close a session
-  - WAIT FOR: sessionManager.closeSession(sessionId, 'admin_action')
-  - NOTE: Run manual cleanup (removes expired sessions)
-  - SET cleanup TO await sessionManager.runManualCleanup()
-  - DO: console.log(`Removed ${cleanup.removedSessionsCount} expired sessions`)
-  - NOTE: Get validation cache statistics
-  - SET cacheStats TO sessionManager.getValidationCacheStats()
-  - FIELD: console.log('Cache entries:', cacheStats.totalEntries)
-  - FIELD: console.log('Cache TTL:', cacheStats.cacheTTL)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Get session manager
+const sessionManager = roditClient.getSessionManager()
+// Get active session count
+const activeCount = await sessionManager.getActiveSessionCount()
+// Get storage information
+const storageInfo = await sessionManager.getStorageInfo()
+console.log('Storage type:', storageInfo.type)
+console.log('Session count:', storageInfo.sessionCount)
+// Enumerate sessions via storage
+const allSessions = await sessionManager.storage.getAll()
+// Or fallback using keys() + get()
+const sessionIds = await sessionManager.storage.keys()
+const sessions = []
+REPEAT: for (const id of sessionIds) {
+  const session = await sessionManager.storage.get(id)
+  if (session) sessions.push(session)
+}
+// Check if token is invalidated
+const isInvalidated = await sessionManager.isTokenInvalidated(jwtToken)
+// Get detailed invalidation info
+const invalidationInfo = await sessionManager.getTokenInvalidationInfo(jwtToken)
+if (invalidationInfo) {
+  console.log('Invalidation reason:', invalidationInfo.reason)
+  console.log('Invalidated at:', invalidationInfo.invalidatedAt)
+}
+// Manually close a session
+await sessionManager.closeSession(sessionId, 'admin_action')
+// Run manual cleanup (removes expired sessions)
+const cleanup = await sessionManager.runManualCleanup()
+console.log(`Removed ${cleanup.removedSessionsCount} expired sessions`)
+// Get validation cache statistics
+const cacheStats = sessionManager.getValidationCacheStats()
+console.log('Cache entries:', cacheStats.totalEntries)
+console.log('Cache TTL:', cacheStats.cacheTTL)
 ```
 
 ### Session Lifecycle
@@ -1132,21 +883,15 @@ OUTPUTS:
 
 The SDK validates tokens by checking session state:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Authentication middleware checks:
-  - NOTE: 1. JWT signature validity
-  - NOTE: 2. JWT expiration
-  - NOTE: 3. Session exists and is active
-  - NOTE: 4. Session not expired
-  - NOTE: After logout, tokens are invalidated because:
-  - NOTE: - Session status set to 'closed'
-  - NOTE: - Subsequent requests fail authentication
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Authentication middleware checks:
+// 1. JWT signature validity
+// 2. JWT expiration
+// 3. Session exists and is active
+// 4. Session not expired
+// After logout, tokens are invalidated because:
+// - Session status set to 'closed'
+// - Subsequent requests fail authentication
 ```
 
 ## Configuration
@@ -1161,19 +906,13 @@ The SDK automatically configures itself from multiple sources with a clear prior
 4. **Provided Default Value** - Optional parameter to `config.get()`
 
 **Example:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET config TO roditClient.getConfig()
-  - NOTE: Priority 1: Checks process.env.SESSION_STORAGE_TYPE
-  - NOTE: Priority 2: Checks host config.get('SESSION_STORAGE_TYPE')
-  - NOTE: Priority 3: Uses SDK default 'memory'
-  - NOTE: Priority 4: Falls back to 'memory' if provided
-  - SET storageType TO config.get('SESSION_STORAGE_TYPE', 'memory')
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const config = roditClient.getConfig()
+// Priority 1: Checks process.env.SESSION_STORAGE_TYPE
+// Priority 2: Checks host config.get('SESSION_STORAGE_TYPE')
+// Priority 3: Uses SDK default 'memory'
+// Priority 4: Falls back to 'memory' if provided
+const storageType = config.get('SESSION_STORAGE_TYPE', 'memory')
 ```
 
 This ensures that:
@@ -1232,86 +971,56 @@ Controls Winston logger verbosity independently from environment:
 
 #### Separation of Concerns
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Environment detection (security)
-  - SET isMain TO process.env.NODE_ENV === 'main'
-  - SET isDevelopment TO process.env.NODE_ENV === 'development'
-  - SET isTest TO process.env.NODE_ENV === 'test'
-  - NOTE: Logging verbosity (independent)
-  - SET config TO roditClient.getConfig()
-  - SET logLevel TO config.get('LOG_LEVEL', 'info')
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Environment detection (security)
+const isMain = process.env.NODE_ENV === 'main'
+const isDevelopment = process.env.NODE_ENV === 'development'
+const isTest = process.env.NODE_ENV === 'test'
+// Logging verbosity (independent)
+const config = roditClient.getConfig()
+const logLevel = config.get('LOG_LEVEL', 'info')
 ```
 
 #### Configuration Examples
 
 **Main (normal):**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export NODE_ENV=main
-  - DO: export LOG_LEVEL=info
-  - NOTE: Results in:
-  - NOTE: - Strict security enforcement
-  - NOTE: - No error details in responses
-  - NOTE: - Minimal logging output
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export NODE_ENV=main
+export LOG_LEVEL=info
+// Results in:
+// - Strict security enforcement
+// - No error details in responses
+// - Minimal logging output
 ```
 
 **Main (troubleshooting):**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export NODE_ENV=main
-  - DO: export LOG_LEVEL=debug
-  - NOTE: Results in:
-  - NOTE: - Strict security enforcement (still main)
-  - NOTE: - No error details in responses (still secure)
-  - NOTE: - Verbose logging for debugging
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export NODE_ENV=main
+export LOG_LEVEL=debug
+// Results in:
+// - Strict security enforcement (still main)
+// - No error details in responses (still secure)
+// - Verbose logging for debugging
 ```
 
 **Development:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export NODE_ENV=development
-  - DO: export LOG_LEVEL=debug
-  - NOTE: Results in:
-  - NOTE: - Relaxed security for development
-  - NOTE: - Detailed error messages in responses
-  - NOTE: - Verbose logging
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export NODE_ENV=development
+export LOG_LEVEL=debug
+// Results in:
+// - Relaxed security for development
+// - Detailed error messages in responses
+// - Verbose logging
 ```
 
 **Testing:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export NODE_ENV=test
-  - DO: export LOG_LEVEL=error
-  - NOTE: Results in:
-  - NOTE: - Test mode (allows bypasses)
-  - NOTE: - Detailed error messages
-  - NOTE: - Only errors logged (cleaner test output)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export NODE_ENV=test
+export LOG_LEVEL=error
+// Results in:
+// - Test mode (allows bypasses)
+// - Detailed error messages
+// - Only errors logged (cleaner test output)
 ```
 
 #### Behavior Matrix
@@ -1327,82 +1036,58 @@ OUTPUTS:
 
 For main deployments, credentials are loaded from HashiCorp Vault:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Environment variables for vault
-  - DO: export RODIT_NEAR_CREDENTIALS_SOURCE=vault
-  - FIELD: export VAULT_ENDPOINT=https://vault.example.com
-  - DO: export VAULT_ROLE_ID=your-role-id
-  - DO: export VAULT_SECRET_ID=your-secret-id
-  - DO: export VAULT_RODIT_KEYVALUE_PATH=secret/rodit
-  - DO: export SERVICE_NAME=your-service-name
-  - DO: export NEAR_CONTRACT_ID=discernible-io.near
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+// Environment variables for vault
+export RODIT_NEAR_CREDENTIALS_SOURCE=vault
+export VAULT_ENDPOINT=https://vault.example.com
+export VAULT_ROLE_ID=your-role-id
+export VAULT_SECRET_ID=your-secret-id
+export VAULT_RODIT_KEYVALUE_PATH=secret/rodit
+export SERVICE_NAME=your-service-name
+export NEAR_CONTRACT_ID=discernible-io.near
 ```
 
 ### File-Based Configuration (Development)
 
 For development, credentials can be loaded from files:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export RODIT_NEAR_CREDENTIALS_SOURCE=file
-  - DO: export CREDENTIALS_FILE_PATH=./credentials/rodit-credentials.json
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export RODIT_NEAR_CREDENTIALS_SOURCE=file
+export CREDENTIALS_FILE_PATH=./credentials/rodit-credentials.json
 ```
 
 ### Accessing Configuration
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Get complete RODiT configuration
-  - SET configObject TO await roditClient.getConfigOwnRodit()
-  - SET metadata TO configObject.own_rodit.metadata
-  - NOTE: Access RODiT token metadata
-  - SET jwtDuration TO metadata.jwt_duration;  // JWT expiration time
-  - SET maxRequests TO metadata.max_requests;  // Rate limit
-  - SET maxRqWindow TO metadata.maxrq_window;  // Rate limit window
-  - SET apiEndpoint TO metadata.subjectuniqueidentifier_url;  // API URL
-  - SET webhookUrl TO metadata.webhook_url;  // Webhook endpoint
-  - NOTE: Parse permissioned routes
-  - SET permissionedRoutes TO JSON.parse(metadata.permissioned_routes || '{}')
-  - NOTE: Use SDK config for application settings
-  - SET config TO roditClient.getConfig()
-  - SET logLevel TO config.get('LOG_LEVEL', 'info')
-  - SET dbPath TO config.get('API_DEFAULT_OPTIONS.DB_PATH')
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Get complete RODiT configuration
+const configObject = await roditClient.getConfigOwnRodit()
+const metadata = configObject.own_rodit.metadata
+// Access RODiT token metadata
+const jwtDuration = metadata.jwt_duration;  // JWT expiration time
+const maxRequests = metadata.max_requests;  // Rate limit
+const maxRqWindow = metadata.maxrq_window;  // Rate limit window
+const apiEndpoint = metadata.subjectuniqueidentifier_url;  // API URL
+const webhookUrl = metadata.webhook_url;  // Webhook endpoint
+// Parse permissioned routes
+const permissionedRoutes = JSON.parse(metadata.permissioned_routes || '{}')
+// Use SDK config for application settings
+const config = roditClient.getConfig()
+const logLevel = config.get('LOG_LEVEL', 'info')
+const dbPath = config.get('API_DEFAULT_OPTIONS.DB_PATH')
 ```
 
 ### Dynamic Rate Limiting
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Configure rate limiting from RODiT token
-  - SET configObject TO await roditClient.getConfigOwnRodit()
-  - SET metadata TO configObject.own_rodit.metadata
-  - CHECK CONDITION: if (metadata.max_requests && metadata.maxrq_window) {
-  - SET maxRequests TO parseInt(metadata.max_requests)
-  - SET windowSeconds TO parseInt(metadata.maxrq_window)
-  - SET rateLimiter TO roditClient.getRateLimitMiddleware()
-  - DO: app.use(rateLimiter(maxRequests, windowSeconds))
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Configure rate limiting from RODiT token
+const configObject = await roditClient.getConfigOwnRodit()
+const metadata = configObject.own_rodit.metadata
+if (metadata.max_requests && metadata.maxrq_window) {
+  const maxRequests = parseInt(metadata.max_requests)
+  const windowSeconds = parseInt(metadata.maxrq_window)
+  const rateLimiter = roditClient.getRateLimitMiddleware()
+  app.use(rateLimiter(maxRequests, windowSeconds))
+}
 ```
 
 ### Environment Variables
@@ -1410,107 +1095,71 @@ OUTPUTS:
 Complete list of SDK environment variables:
 
 #### Core Configuration
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Service identification
-  - DO: export SERVICE_NAME=your-service-name
-  - DO: export API_VERSION=1.0.0
-  - NOTE: Environment and logging
-  - DO: export NODE_ENV=main               # main, development, test
-  - DO: export LOG_LEVEL=info                # error, warn, info, debug, trace
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+// Service identification
+export SERVICE_NAME=your-service-name
+export API_VERSION=1.0.0
+// Environment and logging
+export NODE_ENV=main               # main, development, test
+export LOG_LEVEL=info                # error, warn, info, debug, trace
 ```
 
 #### Credentials and Authentication
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Credential source
-  - DO: export RODIT_NEAR_CREDENTIALS_SOURCE=vault  # vault, file, env
-  - NOTE: Vault configuration (main)
-  - FIELD: export VAULT_ENDPOINT=https://vault.example.com
-  - DO: export VAULT_ROLE_ID=your-role-id
-  - DO: export VAULT_SECRET_ID=your-secret-id
-  - DO: export VAULT_RODIT_KEYVALUE_PATH=secret/rodit
-  - DO: export VAULT_TOKEN_TTL=3600
-  - NOTE: File-based credentials (development)
-  - DO: export CREDENTIALS_FILEPATH=./credentials/rodit.json
-  - NOTE: NEAR blockchain
-  - DO: export NEAR_CONTRACT_ID=discernible-io.near
-  - FIELD: export NEAR_RPC_URL=https://rpc.mainnet.fastnear.com
-  - DO: export NEAR_RPC_CACHE_TTL=5000       # milliseconds
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+// Credential source
+export RODIT_NEAR_CREDENTIALS_SOURCE=vault  # vault, file, env
+// Vault configuration (main)
+export VAULT_ENDPOINT=https://vault.example.com
+export VAULT_ROLE_ID=your-role-id
+export VAULT_SECRET_ID=your-secret-id
+export VAULT_RODIT_KEYVALUE_PATH=secret/rodit
+export VAULT_TOKEN_TTL=3600
+// File-based credentials (development)
+export CREDENTIALS_FILEPATH=./credentials/rodit.json
+// NEAR blockchain
+export NEAR_CONTRACT_ID=discernible-io.near
+export NEAR_RPC_URL=https://rpc.mainnet.fastnear.com
+export NEAR_RPC_CACHE_TTL=5000       # milliseconds
 ```
 
 #### Session Management
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Session storage configuration
-  - DO: export SESSION_STORAGE_TYPE=express-session     # memory, express, express-session
-  - DO: export SESSION_CLEANUP_INTERVAL=3600000         # milliseconds (1 hour)
-  - DO: export SESSION_TOKEN_RETENTION_PERIOD=604800    # seconds (7 days)
-  - DO: export SESSION_VALIDATION_CACHE_TTL=5000        # milliseconds (5 seconds)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+// Session storage configuration
+export SESSION_STORAGE_TYPE=express-session     # memory, express, express-session
+export SESSION_CLEANUP_INTERVAL=3600000         # milliseconds (1 hour)
+export SESSION_TOKEN_RETENTION_PERIOD=604800    # seconds (7 days)
+export SESSION_VALIDATION_CACHE_TTL=5000        # milliseconds (5 seconds)
 ```
 
 #### Logging and Monitoring
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Loki logging
-  - FIELD: export LOKI_URL=https://loki.example.com:3100
-  - FIELD: export LOKI_BASIC_AUTH=username:password
-  - DO: export LOKI_TLS_SKIP_VERIFY=false    # true to skip TLS verification
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+// Loki logging
+export LOKI_URL=https://loki.example.com:3100
+export LOKI_BASIC_AUTH=username:password
+export LOKI_TLS_SKIP_VERIFY=false    # true to skip TLS verification
 ```
 
 #### Security Options
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Webhook configuration
-  - DO: export WEBHOOK_TLS_SKIP_VERIFY=false  # true to skip TLS verification
-  - NOTE: Login mode control (see Login Mode section below)
-  - DO: export SECURITY_OPTIONS_LOGIN_MODE=partner  # partner, promiscuous, or p2p
-  - NOTE: Security thresholds
-  - DO: export SECURITY_OPTIONS_LAPSED_LIFETIME_PROPORTION_4RENEWAL_ELIGIBILITY=0.80
-  - DO: export SECURITY_OPTIONS_THRESHOLD_VALIDATION_TYPE=0.10
-  - DO: export SECURITY_OPTIONS_DURATIONRAMP=0.85
-  - DO: export SECURITY_OPTIONS_SERVERORCLIENT=SERVER-INITIATED
-  - DO: export SECURITY_OPTIONS_SILENT_LOGIN_FAILURES=false
-  - NOTE: Server session lifetime (seconds from login; SDK default 5200)
-  - DO: export SECURITY_OPTIONS_SESSION_TTL_SECONDS=5200
-  - NOTE: Access-token fallback when passport jwt_duration is invalid
-  - DO: export SECURITY_OPTIONS_FALLBACK_JWT_DURATION=3600
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+// Webhook configuration
+export WEBHOOK_TLS_SKIP_VERIFY=false  # true to skip TLS verification
+// Login mode control (see Login Mode section below)
+export SECURITY_OPTIONS_LOGIN_MODE=partner  # partner, promiscuous, or p2p
+// Security thresholds
+export SECURITY_OPTIONS_LAPSED_LIFETIME_PROPORTION_4RENEWAL_ELIGIBILITY=0.80
+export SECURITY_OPTIONS_THRESHOLD_VALIDATION_TYPE=0.10
+export SECURITY_OPTIONS_DURATIONRAMP=0.85
+export SECURITY_OPTIONS_SERVERORCLIENT=SERVER-INITIATED
+export SECURITY_OPTIONS_SILENT_LOGIN_FAILURES=false
+// Server session lifetime (seconds from login; SDK default 5200)
+export SECURITY_OPTIONS_SESSION_TTL_SECONDS=5200
+// Access-token fallback when passport jwt_duration is invalid
+export SECURITY_OPTIONS_FALLBACK_JWT_DURATION=3600
 ```
 
 #### Database Configuration
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export API_DEFAULT_OPTIONS_DB_PATH=/app/data/database.sqlite
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export API_DEFAULT_OPTIONS_DB_PATH=/app/data/database.sqlite
 ```
 
 ## Logging & Monitoring
@@ -1519,38 +1168,32 @@ OUTPUTS:
 
 The SDK provides comprehensive structured logging:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: const { logger } = require('@rodit/rodit-auth-be')
-  - NOTE: Basic logging
-  - DO: logger.info('Operation completed', {
-  - FIELD: component: 'UserService',
-  - FIELD: operation: 'createUser',
-  - FIELD: userId: '123',
-  - FIELD: duration: 150
-  - DO: })
-  - NOTE: Context-aware logging
-  - DO: logger.infoWithContext('Request processed', {
-  - FIELD: component: 'API',
-  - FIELD: method: 'POST',
-  - FIELD: path: '/api/users',
-  - FIELD: requestId: req.requestId,
-  - FIELD: userId: req.user?.id,
-  - FIELD: duration: Date.now() - req.startTime
-  - DO: })
-  - NOTE: Error logging with metrics
-  - DO: logger.errorWithContext('Operation failed', {
-  - FIELD: component: 'UserService',
-  - FIELD: operation: 'createUser',
-  - FIELD: requestId: req.requestId,
-  - FIELD: error: error.message,
-  - FIELD: stack: error.stack
-  - DO: }, error)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const { logger } = require('@rodit/rodit-auth-be')
+// Basic logging
+logger.info('Operation completed', {
+  component: 'UserService',
+  operation: 'createUser',
+  userId: '123',
+  duration: 150
+})
+// Context-aware logging
+logger.infoWithContext('Request processed', {
+  component: 'API',
+  method: 'POST',
+  path: '/api/users',
+  requestId: req.requestId,
+  userId: req.user?.id,
+  duration: Date.now() - req.startTime
+})
+// Error logging with metrics
+logger.errorWithContext('Operation failed', {
+  component: 'UserService',
+  operation: 'createUser',
+  requestId: req.requestId,
+  error: error.message,
+  stack: error.stack
+}, error)
 ```
 
 ### Loki with the SDK (canonical)
@@ -1559,18 +1202,12 @@ Use this as the authoritative guide for configuring logging with the SDK.
 
 #### Environment variables
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - FIELD: export LOKI_URL=https://<your-loki-host>:3100
-  - FIELD: export LOKI_BASIC_AUTH="username:password"   # store in secrets
-  - DO: export LOKI_TLS_SKIP_VERIFY=true              # only for self-signed/test
-  - DO: export LOG_LEVEL=info
-  - DO: export SERVICE_NAME=clienttest-idc
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export LOKI_URL=https://<your-loki-host>:3100
+export LOKI_BASIC_AUTH="username:password"   # store in secrets
+export LOKI_TLS_SKIP_VERIFY=true              # only for self-signed/test
+export LOG_LEVEL=info
+export SERVICE_NAME=clienttest-idc
 ```
 
 These are already mapped in `config/custom-environment-variables.json`, so container/CI env vars will flow into the app.
@@ -1583,36 +1220,30 @@ These are already mapped in `config/custom-environment-variables.json`, so conta
 
 #### Direct-to-Loki via winston-loki (recommended)
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: const { logger } = require('@rodit/rodit-auth-be')
-  - SET winston TO require('winston')
-  - SET LokiTransport TO require('winston-loki')
-  - SET transports TO [new winston.transports.Console({ format: winston.format.json() })]
-  - CHECK CONDITION: if (process.env.LOKI_URL) {
-  - SET lokiOptions TO {
-  - FIELD: host: process.env.LOKI_URL,
-  - FIELD: basicAuth: process.env.LOKI_BASIC_AUTH, // Basic Auth for Loki
-  - FIELD: labels: { app: process.env.SERVICE_NAME || 'clienttest-idc', component: 'rodit-sdk' },
-  - FIELD: json: true,
-  - FIELD: batching: true
-  - DO: }
-  - CHECK CONDITION: if ((process.env.LOKI_TLS_SKIP_VERIFY || '').toLowerCase() === 'true') {
-  - FIELD: lokiOptions.ssl = { rejectUnauthorized: false }
-  - }
-  - DO: transports.push(new LokiTransport(lokiOptions))
-  - }
-  - SET customLogger TO winston.createLogger({
-  - FIELD: level: process.env.LOG_LEVEL || 'info',
-  - FIELD: format: winston.format.json(),
-  - DO: transports
-  - DO: })
-  - DO: logger.setLogger(customLogger)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const { logger } = require('@rodit/rodit-auth-be')
+const winston = require('winston')
+const LokiTransport = require('winston-loki')
+const transports = [new winston.transports.Console({ format: winston.format.json() })]
+if (process.env.LOKI_URL) {
+  const lokiOptions = {
+    host: process.env.LOKI_URL,
+    basicAuth: process.env.LOKI_BASIC_AUTH, // Basic Auth for Loki
+    labels: { app: process.env.SERVICE_NAME || 'clienttest-idc', component: 'rodit-sdk' },
+    json: true,
+    batching: true
+  }
+if ((process.env.LOKI_TLS_SKIP_VERIFY || '').toLowerCase() === 'true') {
+  lokiOptions.ssl = { rejectUnauthorized: false }
+}
+transports.push(new LokiTransport(lokiOptions))
+}
+const customLogger = winston.createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  format: winston.format.json(),
+  transports
+})
+logger.setLogger(customLogger)
 ```
 
 #### CI/CD notes
@@ -1632,144 +1263,120 @@ The SDK includes comprehensive performance tracking and metrics collection.
 
 ### Performance Service
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET performanceService TO roditClient.getPerformanceService()
-  - NOTE: Record incoming request
-  - DO: performanceService.recordRequest(req)
-  - NOTE: Record custom metrics with labels
-  - DO: performanceService.recordMetric('operation_duration', 150, {
-  - FIELD: operation: 'db_query',
-  - FIELD: table: 'users',
-  - FIELD: status: 'success'
-  - DO: })
-  - NOTE: Record errors
-  - DO: performanceService.recordMetric('error_count', 1, {
-  - FIELD: method: req.method,
-  - FIELD: path: req.path,
-  - FIELD: status: res.statusCode
-  - DO: })
-  - NOTE: Get aggregated metrics
-  - SET metrics TO performanceService.getMetrics()
-  - FIELD: console.log('Total requests:', metrics.totalRequests)
-  - FIELD: console.log('Error count:', metrics.errorCount)
-  - FIELD: console.log('Average response time:', metrics.avgResponseTime)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const performanceService = roditClient.getPerformanceService()
+// Record incoming request
+performanceService.recordRequest(req)
+// Record custom metrics with labels
+performanceService.recordMetric('operation_duration', 150, {
+  operation: 'db_query',
+  table: 'users',
+  status: 'success'
+})
+// Record errors
+performanceService.recordMetric('error_count', 1, {
+  method: req.method,
+  path: req.path,
+  status: res.statusCode
+})
+// Get aggregated metrics
+const metrics = performanceService.getMetrics()
+console.log('Total requests:', metrics.totalRequests)
+console.log('Error count:', metrics.errorCount)
+console.log('Average response time:', metrics.avgResponseTime)
 ```
 
 ### Automatic Request Tracking
 
 Integrate performance tracking into your middleware:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Performance monitoring middleware
-  - DO: app.use((req, res, next) => {
-  - DO: req.startTime = Date.now()
-  - SET performanceService TO roditClient.getPerformanceService()
-  - CHECK CONDITION: if (performanceService) {
-  - DO: performanceService.recordRequest(req)
-  - }
-  - DO: res.on('finish', () => {
-  - SET duration TO Date.now() - req.startTime
-  - CHECK CONDITION: if (performanceService) {
-  - NOTE: Record request duration
-  - DO: performanceService.recordMetric('request_duration_ms', duration, {
-  - FIELD: method: req.method,
-  - FIELD: path: req.path,
-  - FIELD: status: res.statusCode
-  - DO: })
-  - NOTE: Record errors
-  - CHECK CONDITION: if (res.statusCode >= 400) {
-  - DO: performanceService.recordMetric('error_count', 1, {
-  - FIELD: method: req.method,
-  - FIELD: path: req.path,
-  - FIELD: status: res.statusCode
-  - DO: })
-  - }
-  - }
-  - DO: })
-  - DO: next()
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Performance monitoring middleware
+app.use((req, res, next) => {
+  req.startTime = Date.now()
+  const performanceService = roditClient.getPerformanceService()
+  if (performanceService) {
+    performanceService.recordRequest(req)
+  }
+res.on('finish', () => {
+  const duration = Date.now() - req.startTime
+  if (performanceService) {
+    // Record request duration
+    performanceService.recordMetric('request_duration_ms', duration, {
+      method: req.method,
+      path: req.path,
+      status: res.statusCode
+    })
+  // Record errors
+  if (res.statusCode >= 400) {
+    performanceService.recordMetric('error_count', 1, {
+      method: req.method,
+      path: req.path,
+      status: res.statusCode
+    })
+}
+}
+})
+next()
+})
 ```
 
 ### Session Performance Metrics
 
 Track session-related performance:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET sessionManager TO roditClient.getSessionManager()
-  - NOTE: Get validation cache statistics
-  - SET cacheStats TO sessionManager.getValidationCacheStats()
-  - DO: logger.info('Session cache performance', {
-  - FIELD: component: 'SessionManager',
-  - FIELD: totalEntries: cacheStats.totalEntries,
-  - FIELD: validEntries: cacheStats.validEntries,
-  - FIELD: expiredEntries: cacheStats.expiredEntries,
-  - FIELD: cacheTTL: cacheStats.cacheTTL,
-  - FIELD: cacheEnabled: cacheStats.cacheEnabled
-  - DO: })
-  - NOTE: Get storage information
-  - SET storageInfo TO await sessionManager.getStorageInfo()
-  - DO: logger.info('Session storage status', {
-  - FIELD: component: 'SessionManager',
-  - FIELD: storageType: storageInfo.type,
-  - FIELD: sessionCount: storageInfo.sessionCount,
-  - FIELD: timestamp: storageInfo.timestamp
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const sessionManager = roditClient.getSessionManager()
+// Get validation cache statistics
+const cacheStats = sessionManager.getValidationCacheStats()
+logger.info('Session cache performance', {
+  component: 'SessionManager',
+  totalEntries: cacheStats.totalEntries,
+  validEntries: cacheStats.validEntries,
+  expiredEntries: cacheStats.expiredEntries,
+  cacheTTL: cacheStats.cacheTTL,
+  cacheEnabled: cacheStats.cacheEnabled
+})
+// Get storage information
+const storageInfo = await sessionManager.getStorageInfo()
+logger.info('Session storage status', {
+  component: 'SessionManager',
+  storageType: storageInfo.type,
+  sessionCount: storageInfo.sessionCount,
+  timestamp: storageInfo.timestamp
+})
 ```
 
 ### Custom Metrics
 
 Record application-specific metrics:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET performanceService TO roditClient.getPerformanceService()
-  - NOTE: Database operation timing
-  - SET dbStart TO Date.now()
-  - SET result TO await db.query('SELECT * FROM users')
-  - SET dbDuration TO Date.now() - dbStart
-  - DO: performanceService.recordMetric('db_query_duration', dbDuration, {
-  - FIELD: operation: 'select',
-  - FIELD: table: 'users',
-  - FIELD: rowCount: result.length
-  - DO: })
-  - NOTE: External API call timing
-  - SET apiStart TO Date.now()
-  - SET apiResponse TO await fetch('https://api.example.com/data')
-  - SET apiDuration TO Date.now() - apiStart
-  - DO: performanceService.recordMetric('external_api_duration', apiDuration, {
-  - FIELD: endpoint: 'api.example.com',
-  - FIELD: status: apiResponse.status,
-  - FIELD: success: apiResponse.ok
-  - DO: })
-  - NOTE: Business metrics
-  - DO: performanceService.recordMetric('user_action', 1, {
-  - FIELD: action: 'comment_created',
-  - FIELD: userId: req.user.id,
-  - FIELD: timestamp: new Date().toISOString()
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const performanceService = roditClient.getPerformanceService()
+// Database operation timing
+const dbStart = Date.now()
+const result = await db.query('SELECT * FROM users')
+const dbDuration = Date.now() - dbStart
+performanceService.recordMetric('db_query_duration', dbDuration, {
+  operation: 'select',
+  table: 'users',
+  rowCount: result.length
+})
+// External API call timing
+const apiStart = Date.now()
+const apiResponse = await fetch('https://api.example.com/data')
+const apiDuration = Date.now() - apiStart
+performanceService.recordMetric('external_api_duration', apiDuration, {
+  endpoint: 'api.example.com',
+  status: apiResponse.status,
+  success: apiResponse.ok
+})
+// Business metrics
+performanceService.recordMetric('user_action', 1, {
+  action: 'comment_created',
+  userId: req.user.id,
+  timestamp: new Date().toISOString()
+})
 ```
 
  ## Webhooks
@@ -1785,107 +1392,83 @@ The SDK supports sending webhooks to multiple endpoints for important events. We
 
 Webhooks are configured in your RODiT token:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - {
-  - FIELD: "webhook_url": "https://webhook.example.com:7443",
-  - FIELD: "webhook_cidr": "0.0.0.0/0"
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```json
+{
+"webhook_url": "https:
+"webhook_cidr": "0.0.0.0/0"
+}
 ```
 
 ### Sending Webhooks to Default Endpoint
 
 Send webhooks to the default `/webhook` endpoint:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Get webhook handler from client
-  - SET roditClient TO req.app.locals.roditClient
-  - NOTE: Send webhook for an event
-  - SET webhookPayload TO {
-  - FIELD: event: 'comment_created',
-  - FIELD: data: {
-  - FIELD: id: comment.id,
-  - FIELD: author: comment.author,
-  - FIELD: timestamp: new Date().toISOString()
-  - DO: },
-  - FIELD: isError: false
-  - DO: }
-  - DO: try {
-  - SET result TO await roditClient.sendWebhook(webhookPayload, req)
-  - CHECK CONDITION: if (result.success) {
-  - DO: logger.info('Webhook sent successfully', {
-  - FIELD: component: 'CRUDA',
-  - FIELD: event: webhookPayload.event,
-  - FIELD: requestId: req.requestId
-  - DO: })
-  - }
-  - DO: } catch (error) {
-  - NOTE: Webhook failures don't crash the application
-  - DO: logger.warn('Webhook delivery failed', {
-  - FIELD: component: 'CRUDA',
-  - FIELD: event: webhookPayload.event,
-  - FIELD: error: error.message,
-  - FIELD: requestId: req.requestId
-  - DO: })
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Get webhook handler from client
+const roditClient = req.app.locals.roditClient
+// Send webhook for an event
+const webhookPayload = {
+  event: 'comment_created',
+  data: {
+    id: comment.id,
+    author: comment.author,
+    timestamp: new Date().toISOString()
+  },
+isError: false
+}
+try {
+  const result = await roditClient.sendWebhook(webhookPayload, req)
+  if (result.success) {
+    logger.info('Webhook sent successfully', {
+      component: 'CRUDA',
+      event: webhookPayload.event,
+      requestId: req.requestId
+    })
+}
+} catch (error) {
+// Webhook failures don't crash the application
+logger.warn('Webhook delivery failed', {
+  component: 'CRUDA',
+  event: webhookPayload.event,
+  error: error.message,
+  requestId: req.requestId
+})
+}
 ```
 
 ### Sending Webhooks to Custom Endpoints
 
 Send webhooks to specific endpoints like `/hooks/wake` or `/hooks/agent`:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET roditClient TO req.app.locals.roditClient
-  - SET webhookPayload TO {
-  - FIELD: event: 'heartbeat_request',
-  - FIELD: data: {
-  - FIELD: timestamp: new Date().toISOString(),
-  - FIELD: source: '/api/testhola'
-  - }
-  - DO: }
-  - NOTE: Send to /hooks/wake endpoint (trigger immediate heartbeat)
-  - WAIT FOR: roditClient.sendWebhookToEndpoint(webhookPayload, '/hooks/wake', req)
-  - NOTE: Send to /hooks/agent endpoint (run isolated agent task)
-  - WAIT FOR: roditClient.sendWebhookToEndpoint(webhookPayload, '/hooks/agent', req)
-  - NOTE: Send to custom endpoint
-  - WAIT FOR: roditClient.sendWebhookToEndpoint(webhookPayload, '/hooks/custom', req)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const roditClient = req.app.locals.roditClient
+const webhookPayload = {
+  event: 'heartbeat_request',
+  data: {
+    timestamp: new Date().toISOString(),
+    source: '/api/testhola'
+  }
+}
+// Send to /hooks/wake endpoint (trigger immediate heartbeat)
+await roditClient.sendWebhookToEndpoint(webhookPayload, '/hooks/wake', req)
+// Send to /hooks/agent endpoint (run isolated agent task)
+await roditClient.sendWebhookToEndpoint(webhookPayload, '/hooks/agent', req)
+// Send to custom endpoint
+await roditClient.sendWebhookToEndpoint(webhookPayload, '/hooks/custom', req)
 ```
 
 ### Convenience Methods for Common Endpoints
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET roditClient TO req.app.locals.roditClient
-  - SET payload TO {
-  - FIELD: event: 'test_event',
-  - FIELD: data: { timestamp: new Date().toISOString() }
-  - DO: }
-  - NOTE: Send to /hooks/wake (heartbeat confirmation)
-  - WAIT FOR: roditClient.sendWakeHook(payload, req)
-  - NOTE: Send to /hooks/agent (agent task confirmation)
-  - WAIT FOR: roditClient.sendAgentHook(payload, req)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const roditClient = req.app.locals.roditClient
+const payload = {
+  event: 'test_event',
+  data: { timestamp: new Date().toISOString() }
+}
+// Send to /hooks/wake (heartbeat confirmation)
+await roditClient.sendWakeHook(payload, req)
+// Send to /hooks/agent (agent task confirmation)
+await roditClient.sendAgentHook(payload, req)
 ```
 
 ### Webhook Endpoint Purposes
@@ -1898,60 +1481,46 @@ OUTPUTS:
 
 ### Webhook Error Handling
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Graceful webhook handling in CRUDA operations
-  - SET logAndSendWebhook TO async (payload, req = null) => {
-  - DO: try {
-  - SET roditClient TO req?.app?.locals?.roditClient
-  - CHECK CONDITION: if (!roditClient) {
-  - DO: logger.warn('RoditClient not available, skipping webhook', {
-  - FIELD: component: 'CRUDA',
-  - FIELD: event: payload?.event
-  - DO: })
-  - RETURN { success: false, error: 'RoditClient not available' }
-  - }
-  - RETURN await roditClient.sendWebhook(payload, req)
-  - DO: } catch (error) {
-  - NOTE: Log but don't throw - webhook failures shouldn't crash the app
-  - DO: logger.error('Webhook delivery failed', {
-  - FIELD: component: 'CRUDA',
-  - FIELD: event: payload?.event,
-  - FIELD: error: error.message
-  - DO: })
-  - RETURN { success: false, error: error.message }
-  - }
-  - DO: }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Graceful webhook handling in CRUDA operations
+const logAndSendWebhook = async (payload, req = null) => {
+  try {
+    const roditClient = req?.app?.locals?.roditClient
+    if (!roditClient) {
+      logger.warn('RoditClient not available, skipping webhook', {
+        component: 'CRUDA',
+        event: payload?.event
+      })
+    { success: false, error: 'RoditClient not available' }
+  }
+await roditClient.sendWebhook(payload, req)
+} catch (error) {
+// Log but don't throw - webhook failures shouldn't crash the app
+logger.error('Webhook delivery failed', {
+  component: 'CRUDA',
+  event: payload?.event,
+  error: error.message
+})
+{ success: false, error: error.message }
+}
+}
 ```
 
 ### Development/Testing Webhooks
 
 The `/api/testhola` endpoint sends test webhooks in development mode (`NODE_ENV === 'development'`):
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Event: testhola_validation_success
-  - NOTE: Sent to: /hooks/wake and /hooks/agent (development only)
-  - {
-  - FIELD: "event": "testhola_validation_success",
-  - FIELD: "data": {
-  - FIELD: "peerTokenId": "bcdfhjkmnpqr",
-  - FIELD: "serverTokenId": "bcdfhjkmnpqr",
-  - FIELD: "recipient": "MUNDO",
-  - FIELD: "timestamp": "2026-04-24T14:30:00.000Z",
-  - FIELD: "endpoint": "/api/testhola"
-  - }
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```json
+{
+  "event": "testhola_validation_success",
+  "data": {
+    "peerTokenId": "bcdfhjkmnpqr",
+    "serverTokenId": "bcdfhjkmnpqr",
+    "recipient": "MUNDO",
+    "timestamp": "2026-04-24T14:30:00.000Z",
+    "endpoint": "/api/testhola"
+  }
+}
 ```
 
 **Use Case:** Test webhook delivery and signature validation during development without needing a main deployment.
@@ -1962,127 +1531,115 @@ OUTPUTS:
 
 Create reusable route modules that access the shared RoditClient:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: routes/protected.js
-  - SET express TO require('express')
-  - DO: const { logger } = require('@rodit/rodit-auth-be')
-  - SET router TO express.Router()
-  - NOTE: Middleware that uses the shared client
-  - SET authenticate TO (req, res, next) => {
-  - SET client TO req.app.locals.roditClient
-  - CHECK CONDITION: if (!client) {
-  - RETURN res.status(503).json({ error: 'Authentication service unavailable' })
-  - }
-  - RETURN client.authenticate(req, res, next)
-  - DO: }
-  - SET authorize TO (req, res, next) => {
-  - SET client TO req.app.locals.roditClient
-  - CHECK CONDITION: if (!client) {
-  - RETURN res.status(503).json({ error: 'Authentication service unavailable' })
-  - }
-  - RETURN client.authorize(req, res, next)
-  - DO: }
-  - NOTE: Protected route with full authentication and authorization
-  - DO: router.get('/data', authenticate, authorize, async (req, res) => {
-  - SET startTime TO Date.now()
-  - DO: try {
-  - NOTE: Your business logic here
-  - SET data TO await processUserData(req.user.id)
-  - DO: logger.infoWithContext('Data retrieved successfully', {
-  - FIELD: component: 'ProtectedRoutes',
-  - FIELD: method: 'getData',
-  - FIELD: userId: req.user.id,
-  - FIELD: requestId: req.requestId,
-  - FIELD: duration: Date.now() - startTime
-  - DO: })
-  - FIELD: res.json({ data, requestId: req.requestId })
-  - DO: } catch (error) {
-  - DO: logger.errorWithContext('Failed to retrieve data', {
-  - FIELD: component: 'ProtectedRoutes',
-  - FIELD: method: 'getData',
-  - FIELD: userId: req.user.id,
-  - FIELD: requestId: req.requestId,
-  - FIELD: duration: Date.now() - startTime,
-  - FIELD: error: error.message
-  - DO: }, error)
-  - DO: res.status(500).json({
-  - FIELD: error: 'Internal server error',
-  - FIELD: requestId: req.requestId
-  - DO: })
-  - }
-  - DO: })
-  - DO: module.exports = router
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// routes/protected.js
+const express = require('express')
+const { logger } = require('@rodit/rodit-auth-be')
+const router = express.Router()
+// Middleware that uses the shared client
+const authenticate = (req, res, next) => {
+  const client = req.app.locals.roditClient
+  if (!client) {
+    res.status(503).json({ error: 'Authentication service unavailable' })
+  }
+client.authenticate(req, res, next)
+}
+const authorize = (req, res, next) => {
+  const client = req.app.locals.roditClient
+  if (!client) {
+    res.status(503).json({ error: 'Authentication service unavailable' })
+  }
+client.authorize(req, res, next)
+}
+// Protected route with full authentication and authorization
+router.get('/data', authenticate, authorize, async (req, res) => {
+  const startTime = Date.now()
+  try {
+    // Your business logic here
+    const data = await processUserData(req.user.id)
+    logger.infoWithContext('Data retrieved successfully', {
+      component: 'ProtectedRoutes',
+      method: 'getData',
+      userId: req.user.id,
+      requestId: req.requestId,
+      duration: Date.now() - startTime
+    })
+  res.json({ data, requestId: req.requestId })
+} catch (error) {
+logger.errorWithContext('Failed to retrieve data', {
+  component: 'ProtectedRoutes',
+  method: 'getData',
+  userId: req.user.id,
+  requestId: req.requestId,
+  duration: Date.now() - startTime,
+  error: error.message
+}, error)
+res.status(500).json({
+  error: 'Internal server error',
+  requestId: req.requestId
+})
+}
+})
+module.exports = router
 ```
 
 ### Portal Authentication (Server-to-Server)
 
 For server-to-server authentication (e.g., minting client tokens):
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: routes/signclient.js
-  - SET router TO express.Router()
-  - DO: router.post('/signclient', authenticate, authorize, async (req, res) => {
-  - DO: const { tobesignedValues, mintingfee, mintingfeeaccount } = req.body
-  - SET client TO req.app.locals.roditClient
-  - SET logger TO client.getLogger()
-  - DO: try {
-  - NOTE: Validate requested permissions against server's permissions
-  - SET configObject TO await client.getConfigOwnRodit()
-  - SET serverPermissions TO JSON.parse(
-  - DO: configObject.own_rodit.metadata.permissioned_routes || '{}'
-  - DO: )
-  - SET requestedPermissions TO JSON.parse(
-  - DO: tobesignedValues.permissioned_routes || '{}'
-  - DO: )
-  - NOTE: Validate that all requested routes exist in server config
-  - NOTE: (Implementation details in actual code)
-  - NOTE: Authenticate to portal and mint client token
-  - SET port TO configObject.port || 8443
-  - SET result TO await client.login_portal(configObject, port)
-  - CHECK CONDITION: if (result.error) {
-  - RETURN res.status(500).json({
-  - FIELD: error: 'Portal authentication failed',
-  - FIELD: details: result.message,
-  - FIELD: requestId: req.requestId
-  - DO: })
-  - }
-  - NOTE: Sign the client token via portal
-  - SET signedToken TO await signPortalRodit(
-  - DO: port,
-  - DO: tobesignedValues,
-  - DO: mintingfee,
-  - DO: mintingfeeaccount,
-  - DO: client
-  - DO: )
-  - DO: res.json({
-  - DO: signedToken,
-  - FIELD: requestId: req.requestId
-  - DO: })
-  - DO: } catch (error) {
-  - DO: logger.errorWithContext('Client token minting failed', {
-  - FIELD: component: 'SignClient',
-  - FIELD: requestId: req.requestId,
-  - FIELD: error: error.message
-  - DO: }, error)
-  - DO: res.status(500).json({
-  - FIELD: error: 'Token minting failed',
-  - FIELD: requestId: req.requestId
-  - DO: })
-  - }
-  - DO: })
-  - DO: module.exports = router
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// routes/signclient.js
+const router = express.Router()
+router.post('/signclient', authenticate, authorize, async (req, res) => {
+  const { tobesignedValues, mintingfee, mintingfeeaccount } = req.body
+  const client = req.app.locals.roditClient
+  const logger = client.getLogger()
+  try {
+    // Validate requested permissions against server's permissions
+    const configObject = await client.getConfigOwnRodit()
+    const serverPermissions = JSON.parse(
+    configObject.own_rodit.metadata.permissioned_routes || '{}'
+    )
+    const requestedPermissions = JSON.parse(
+    tobesignedValues.permissioned_routes || '{}'
+    )
+    // Validate that all requested routes exist in server config
+    // (Implementation details in actual code)
+    // Authenticate to portal and mint client token
+    const port = configObject.port || 8443
+    const result = await client.login_portal(configObject, port)
+    if (result.error) {
+      res.status(500).json({
+        error: 'Portal authentication failed',
+        details: result.message,
+        requestId: req.requestId
+      })
+  }
+// Sign the client token via portal
+const signedToken = await signPortalRodit(
+port,
+tobesignedValues,
+mintingfee,
+mintingfeeaccount,
+client
+)
+res.json({
+  signedToken,
+  requestId: req.requestId
+})
+} catch (error) {
+logger.errorWithContext('Client token minting failed', {
+  component: 'SignClient',
+  requestId: req.requestId,
+  error: error.message
+}, error)
+res.status(500).json({
+  error: 'Token minting failed',
+  requestId: req.requestId
+})
+}
+})
+module.exports = router
 ```
 
 ### SignPortal URL Configuration
@@ -2144,35 +1701,23 @@ Components:
 - `id=` - One or more identifier components
 
 Example:
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - {
-  - FIELD: "serviceprovider_id": "bc=near.org;sc=roditcorp-com.near;id=01K8QECHMKFVNWQ54PJ2W2GMA7;id=01K8QECHMM1214VMDHSH7JM6H8"
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```json
+{
+  "serviceprovider_id": "bc=near.org;sc=roditcorp-com.near;id=01K8QECHMKFVNWQ54PJ2W2GMA7;id=01K8QECHMM1214VMDHSH7JM6H8"
+}
 ```
 
 #### URL Construction Method
 
 The SDK uses `roditClient.getPortalUrl(serviceProviderId, port)` to construct the SignPortal URL:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET client TO req.app.locals.roditClient
-  - SET configObject TO await client.getConfigOwnRodit()
-  - SET serviceProviderId TO configObject.own_rodit.metadata.serviceprovider_id
-  - SET portalPort TO 8443
-  - NOTE: Automatically constructs: https://signportal.<domain>.<tld>:8443
-  - SET portalUrl TO client.getPortalUrl(serviceProviderId, portalPort)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const client = req.app.locals.roditClient
+const configObject = await client.getConfigOwnRodit()
+const serviceProviderId = configObject.own_rodit.metadata.serviceprovider_id
+const portalPort = 8443
+// Automatically constructs: https://signportal.<domain>.<tld>:8443
+const portalUrl = client.getPortalUrl(serviceProviderId, portalPort)
 ```
 
 #### Troubleshooting
@@ -2197,169 +1742,157 @@ OUTPUTS:
 
 To verify your SignPortal URL configuration:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET client TO req.app.locals.roditClient
-  - SET logger TO client.getLogger()
-  - DO: try {
-  - SET configObject TO await client.getConfigOwnRodit()
-  - SET serviceProviderId TO configObject.own_rodit.metadata.serviceprovider_id
-  - DO: logger.info('RODiT Configuration', {
-  - FIELD: component: 'SignPortal',
-  - DO: serviceProviderId,
-  - FIELD: hasServiceProviderId: !!serviceProviderId
-  - DO: })
-  - CHECK CONDITION: if (serviceProviderId) {
-  - SET portalUrl TO client.getPortalUrl(serviceProviderId, 8443)
-  - DO: logger.info('SignPortal URL constructed', {
-  - FIELD: component: 'SignPortal',
-  - DO: portalUrl
-  - DO: })
-  - }
-  - DO: } catch (error) {
-  - DO: logger.error('SignPortal URL construction failed', {
-  - FIELD: component: 'SignPortal',
-  - FIELD: error: error.message
-  - DO: })
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const client = req.app.locals.roditClient
+const logger = client.getLogger()
+try {
+  const configObject = await client.getConfigOwnRodit()
+  const serviceProviderId = configObject.own_rodit.metadata.serviceprovider_id
+  logger.info('RODiT Configuration', {
+    component: 'SignPortal',
+    serviceProviderId,
+    hasServiceProviderId: !!serviceProviderId
+  })
+if (serviceProviderId) {
+  const portalUrl = client.getPortalUrl(serviceProviderId, 8443)
+  logger.info('SignPortal URL constructed', {
+    component: 'SignPortal',
+    portalUrl
+  })
+}
+} catch (error) {
+logger.error('SignPortal URL construction failed', {
+  component: 'SignPortal',
+  error: error.message
+})
+}
 ```
 
 ### CRUDA Operations Example
 
 Complete CRUD implementation with authentication, authorization, webhooks, and performance tracking:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: protected/cruda.js
-  - SET express TO require('express')
-  - SET router TO express.Router()
-  - DO: const { RoditClient } = require('@rodit/rodit-auth-be')
-  - SET sqlite3 TO require('sqlite3')
-  - DO: const { open } = require('sqlite')
-  - DO: const { ulid } = require('ulid')
-  - SET sdkClient TO new RoditClient()
-  - SET logger TO sdkClient.getLogger()
-  - DO: let db
-  - NOTE: Initialize database
-  - SET initializeDatabase TO async () => {
-  - SET db TO await open({
-  - FIELD: filename: '/app/data/database.sqlite',
-  - FIELD: driver: sqlite3.Database
-  - DO: })
-  - WAIT FOR: db.run(`CREATE TABLE IF NOT EXISTS comments (
-  - DO: id INTEGER PRIMARY KEY AUTOINCREMENT,
-  - DO: comment TEXT NOT NULL,
-  - DO: author TEXT,
-  - DO: created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  - DO: updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  - DO: )`)
-  - DO: }
-  - NOTE: Webhook helper
-  - SET logAndSendWebhook TO async (payload, req) => {
-  - DO: try {
-  - SET roditClient TO req?.app?.locals?.roditClient
-  - CHECK CONDITION: if (!roditClient) return { success: false }
-  - RETURN await roditClient.send_webhook(payload, req)
-  - DO: } catch (error) {
-  - FIELD: logger.error('Webhook failed', { error: error.message })
-  - RETURN { success: false, error: error.message }
-  - }
-  - DO: }
-  - NOTE: CREATE
-  - DO: router.post('/create', async (req, res) => {
-  - DO: const { comment, author } = req.body
-  - SET requestId TO req.requestId || ulid()
-  - DO: try {
-  - SET result TO await db.run(
-  - DO: 'INSERT INTO comments (comment, author) VALUES (?, ?)',
-  - DO: [comment, author || req.user.roditId]
-  - DO: )
-  - NOTE: Send webhook
-  - WAIT FOR: logAndSendWebhook({
-  - FIELD: event: 'comment_created',
-  - FIELD: data: { id: result.lastID, comment, author },
-  - FIELD: isError: false
-  - DO: }, req)
-  - FIELD: res.json({ id: result.lastID, requestId })
-  - DO: } catch (error) {
-  - DO: logger.errorWithContext('Create failed', {
-  - FIELD: component: 'CRUDA',
-  - FIELD: error: error.message,
-  - DO: requestId
-  - DO: }, error)
-  - FIELD: res.status(500).json({ error: 'Create failed', requestId })
-  - }
-  - DO: })
-  - NOTE: LIST
-  - DO: router.post('/list', async (req, res) => {
-  - DO: try {
-  - SET records TO await db.all(
-  - DO: 'SELECT * FROM comments ORDER BY created_at DESC'
-  - DO: )
-  - FIELD: res.json({ records, requestId: req.requestId })
-  - DO: } catch (error) {
-  - FIELD: res.status(500).json({ error: 'List failed', requestId: req.requestId })
-  - }
-  - DO: })
-  - NOTE: READ
-  - DO: router.post('/read', async (req, res) => {
-  - DO: const { id } = req.body
-  - DO: try {
-  - SET record TO await db.get('SELECT * FROM comments WHERE id = ?', [id])
-  - CHECK CONDITION: if (!record) {
-  - RETURN res.status(404).json({ error: 'Not found', requestId: req.requestId })
-  - }
-  - FIELD: res.json({ record, requestId: req.requestId })
-  - DO: } catch (error) {
-  - FIELD: res.status(500).json({ error: 'Read failed', requestId: req.requestId })
-  - }
-  - DO: })
-  - NOTE: UPDATE
-  - DO: router.post('/update', async (req, res) => {
-  - DO: const { id, comment } = req.body
-  - DO: try {
-  - WAIT FOR: db.run(
-  - DO: 'UPDATE comments SET comment = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-  - DO: [comment, id]
-  - DO: )
-  - WAIT FOR: logAndSendWebhook({
-  - FIELD: event: 'comment_updated',
-  - FIELD: data: { id, comment },
-  - FIELD: isError: false
-  - DO: }, req)
-  - FIELD: res.json({ success: true, requestId: req.requestId })
-  - DO: } catch (error) {
-  - FIELD: res.status(500).json({ error: 'Update failed', requestId: req.requestId })
-  - }
-  - DO: })
-  - NOTE: DELETE
-  - DO: router.post('/destroy', async (req, res) => {
-  - DO: const { id } = req.body
-  - DO: try {
-  - WAIT FOR: db.run('DELETE FROM comments WHERE id = ?', [id])
-  - WAIT FOR: logAndSendWebhook({
-  - FIELD: event: 'comment_deleted',
-  - FIELD: data: { id },
-  - FIELD: isError: false
-  - DO: }, req)
-  - FIELD: res.json({ success: true, requestId: req.requestId })
-  - DO: } catch (error) {
-  - FIELD: res.status(500).json({ error: 'Delete failed', requestId: req.requestId })
-  - }
-  - DO: })
-  - NOTE: Export initialization function
-  - DO: module.exports = router
-  - DO: module.exports.initializeDatabase = initializeDatabase
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// protected/cruda.js
+const express = require('express')
+const router = express.Router()
+const { RoditClient } = require('@rodit/rodit-auth-be')
+const sqlite3 = require('sqlite3')
+const { open } = require('sqlite')
+const { ulid } = require('ulid')
+const sdkClient = new RoditClient()
+const logger = sdkClient.getLogger()
+let db
+// Initialize database
+const initializeDatabase = async () => {
+  const db = await open({
+    filename: '/app/data/database.sqlite',
+    driver: sqlite3.Database
+  })
+await db.run(`CREATE TABLE IF NOT EXISTS comments (
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+comment TEXT NOT NULL,
+author TEXT,
+created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`)
+}
+// Webhook helper
+const logAndSendWebhook = async (payload, req) => {
+  try {
+    const roditClient = req?.app?.locals?.roditClient
+    if (!roditClient) return { success: false }
+    await roditClient.send_webhook(payload, req)
+  } catch (error) {
+  logger.error('Webhook failed', { error: error.message })
+  { success: false, error: error.message }
+}
+}
+// CREATE
+router.post('/create', async (req, res) => {
+  const { comment, author } = req.body
+  const requestId = req.requestId || ulid()
+  try {
+    const result = await db.run(
+    'INSERT INTO comments (comment, author) VALUES (?, ?)',
+    [comment, author || req.user.roditId]
+    )
+    // Send webhook
+    await logAndSendWebhook({
+      event: 'comment_created',
+      data: { id: result.lastID, comment, author },
+      isError: false
+    }, req)
+  res.json({ id: result.lastID, requestId })
+} catch (error) {
+logger.errorWithContext('Create failed', {
+  component: 'CRUDA',
+  error: error.message,
+  requestId
+}, error)
+res.status(500).json({ error: 'Create failed', requestId })
+}
+})
+// LIST
+router.post('/list', async (req, res) => {
+  try {
+    const records = await db.all(
+    'SELECT * FROM comments ORDER BY created_at DESC'
+    )
+    res.json({ records, requestId: req.requestId })
+  } catch (error) {
+  res.status(500).json({ error: 'List failed', requestId: req.requestId })
+}
+})
+// READ
+router.post('/read', async (req, res) => {
+  const { id } = req.body
+  try {
+    const record = await db.get('SELECT * FROM comments WHERE id = ?', [id])
+    if (!record) {
+      res.status(404).json({ error: 'Not found', requestId: req.requestId })
+    }
+  res.json({ record, requestId: req.requestId })
+} catch (error) {
+res.status(500).json({ error: 'Read failed', requestId: req.requestId })
+}
+})
+// UPDATE
+router.post('/update', async (req, res) => {
+  const { id, comment } = req.body
+  try {
+    await db.run(
+    'UPDATE comments SET comment = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+    [comment, id]
+    )
+    await logAndSendWebhook({
+      event: 'comment_updated',
+      data: { id, comment },
+      isError: false
+    }, req)
+  res.json({ success: true, requestId: req.requestId })
+} catch (error) {
+res.status(500).json({ error: 'Update failed', requestId: req.requestId })
+}
+})
+// DELETE
+router.post('/destroy', async (req, res) => {
+  const { id } = req.body
+  try {
+    await db.run('DELETE FROM comments WHERE id = ?', [id])
+    await logAndSendWebhook({
+      event: 'comment_deleted',
+      data: { id },
+      isError: false
+    }, req)
+  res.json({ success: true, requestId: req.requestId })
+} catch (error) {
+res.status(500).json({ error: 'Delete failed', requestId: req.requestId })
+}
+})
+// Export initialization function
+module.exports = router
+module.exports.initializeDatabase = initializeDatabase
 ```
 
 ## API Reference
@@ -2374,16 +1907,10 @@ The main client class for all RODiT operations.
 
 Create and initialize a RODiT client in one step.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET client TO await RoditClient.create('server');  // For server applications
-  - SET client TO await RoditClient.create('client');  // For client applications
-  - SET client TO await RoditClient.create('portal');  // For portal authentication
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const client = await RoditClient.create('server');  // For server applications
+const client = await RoditClient.create('client');  // For client applications
+const client = await RoditClient.create('portal');  // For portal authentication
 ```
 
 **Parameters:**
@@ -2399,15 +1926,9 @@ OUTPUTS:
 
 Express middleware for authenticating API requests. Validates JWT tokens and populates `req.user`.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET authenticate TO (req, res, next) => roditClient.authenticate(req, res, next)
-  - DO: app.use('/api/protected', authenticate, handler)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const authenticate = (req, res, next) => roditClient.authenticate(req, res, next)
+app.use('/api/protected', authenticate, handler)
 ```
 
 **Validates:**
@@ -2424,15 +1945,9 @@ OUTPUTS:
 Express middleware for logout routes. It validates signature and claims like normal auth, but allows
 signature-valid expired JWT tokens so sessions can still be closed safely.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET authenticateLogout TO (req, res, next) => roditClient.authenticateForLogout(req, res, next)
-  - DO: app.post('/api/logout', authenticateLogout, (req, res) => roditClient.logout_client(req, res))
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const authenticateLogout = (req, res, next) => roditClient.authenticateForLogout(req, res, next)
+app.post('/api/logout', authenticateLogout, (req, res) => roditClient.logout_client(req, res))
 ```
 
 **Use case:** clean logout when token is expired but cryptographically valid.
@@ -2441,15 +1956,9 @@ OUTPUTS:
 
 Express middleware for validating route permissions. Must be used after `authenticate`.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET authorize TO (req, res, next) => roditClient.authorize(req, res, next)
-  - DO: app.use('/api/admin', authenticate, authorize, handler)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const authorize = (req, res, next) => roditClient.authorize(req, res, next)
+app.use('/api/admin', authenticate, authorize, handler)
 ```
 
 **Validates:** User has permission for the requested route and HTTP method
@@ -2458,77 +1967,47 @@ OUTPUTS:
 
 Handle Express login requests from clients. Validates RODiT credentials and issues JWT token.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: app.post('/api/login', (req, res) => roditClient.login_client(req, res))
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+app.post('/api/login', (req, res) => roditClient.login_client(req, res))
 ```
 
 **Request Body:** `login_client` accepts `accountid`, `timestamp`, and `base64url_signature`.
 
 **Response:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - {
-  - FIELD: jwt_token: '<jwt-token>',
-  - FIELD: requestId: '01HQXYZ...'
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+{
+  jwt_token: '<jwt-token>',
+  requestId: '01HQXYZ...'
+}
 ```
 
 ##### logout_client(req, res)
 
 Handle Express logout requests. Closes session and invalidates JWT token.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET authenticateLogout TO (req, res, next) => roditClient.authenticateForLogout(req, res, next)
-  - DO: app.post('/api/logout', authenticateLogout, (req, res) => {
-  - RETURN roditClient.logout_client(req, res)
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const authenticateLogout = (req, res, next) => roditClient.authenticateForLogout(req, res, next)
+app.post('/api/logout', authenticateLogout, (req, res) => {
+  roditClient.logout_client(req, res)
+})
 ```
 
 **Response:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - {
-  - FIELD: message: 'Logout successful',
-  - FIELD: terminationToken: '<jwt-token>',  // Short-lived token
-  - FIELD: requestId: '01HQXYZ...'
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+{
+  message: 'Logout successful',
+  terminationToken: '<jwt-token>',  // Short-lived token
+  requestId: '01HQXYZ...'
+}
 ```
 
 ##### login_portal(configObject, port)
 
 Authenticate to RODiT portal for server-to-server operations using account-based login payloads.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET configObject TO await roditClient.getConfigOwnRodit()
-  - SET result TO await roditClient.login_portal(configObject, 8443)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const configObject = await roditClient.getConfigOwnRodit()
+const result = await roditClient.login_portal(configObject, 8443)
 ```
 
 **Returns:** `Promise<Object>` - Portal authentication result
@@ -2539,16 +2018,10 @@ Authenticate to a peer API using account-based login semantics: sign **`accounti
 
 Optional: `options.timestamp`, `options.loginPath`.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET result TO await roditClient.login_server({
-  - FIELD: loginPath: '/api/login'  // optional; default shown
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const result = await roditClient.login_server({
+  loginPath: '/api/login'  // optional; default shown
+})
 ```
 
 **Returns:** `Promise<Object>` - Authentication result with `jwt_token`
@@ -2557,14 +2030,8 @@ OUTPUTS:
 
 Logout from server-to-server session.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET result TO await roditClient.logout_server()
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const result = await roditClient.logout_server()
 ```
 
 **Returns:** `Promise<Object>` - Logout result with session closure status
@@ -2573,60 +2040,42 @@ OUTPUTS:
 
 Get the complete RODiT configuration including token metadata.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET configObject TO await roditClient.getConfigOwnRodit()
-  - SET metadata TO configObject.own_rodit.metadata
-  - SET tokenId TO configObject.own_rodit.token_id
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const configObject = await roditClient.getConfigOwnRodit()
+const metadata = configObject.own_rodit.metadata
+const tokenId = configObject.own_rodit.token_id
 ```
 
 **Returns:** `Promise<Object>` - Complete RODiT configuration
 
 **Structure:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - {
-  - FIELD: own_rodit: {
-  - FIELD: token_id: string,
-  - FIELD: metadata: {
-  - FIELD: jwt_duration: number,
-  - FIELD: max_requests: string,
-  - FIELD: maxrq_window: string,
-  - FIELD: permissioned_routes: string,  // JSON string
-  - FIELD: subjectuniqueidentifier_url: string,
-  - FIELD: webhook_url: string,
-  - NOTE: ... other metadata fields
-  - }
-  - DO: },
-  - FIELD: port: number
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+{
+  own_rodit: {
+    token_id: string,
+    metadata: {
+      jwt_duration: number,
+      max_requests: string,
+      maxrq_window: string,
+      permissioned_routes: string,  // JSON string
+      subjectuniqueidentifier_url: string,
+      webhook_url: string,
+      // ... other metadata fields
+    }
+},
+port: number
+}
 ```
 
 ##### isOperationPermitted(method, path)
 
 Check if an operation is permitted based on token permissions.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET hasPermission TO roditClient.isOperationPermitted('POST', '/api/admin/users')
-  - CHECK CONDITION: if (!hasPermission) {
-  - RETURN res.status(403).json({ error: 'Forbidden' })
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const hasPermission = roditClient.isOperationPermitted('POST', '/api/admin/users')
+if (!hasPermission) {
+  res.status(403).json({ error: 'Forbidden' })
+}
 ```
 
 **Parameters:**
@@ -2639,14 +2088,8 @@ OUTPUTS:
 
 Get the authentication state manager.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET stateManager TO roditClient.getStateManager()
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const stateManager = roditClient.getStateManager()
 ```
 
 **Returns:** `AuthStateManager` instance
@@ -2655,15 +2098,9 @@ OUTPUTS:
 
 Get the RODiT manager for credential operations.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET roditManager TO roditClient.getRoditManager()
-  - SET credentials TO await roditManager.getCredentials('server')
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const roditManager = roditClient.getRoditManager()
+const credentials = await roditManager.getCredentials('server')
 ```
 
 **Returns:** `RoditManager` instance
@@ -2672,15 +2109,9 @@ OUTPUTS:
 
 Get the session manager.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET sessionManager TO roditClient.getSessionManager()
-  - SET activeCount TO await sessionManager.getActiveSessionCount()
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const sessionManager = roditClient.getSessionManager()
+const activeCount = await sessionManager.getActiveSessionCount()
 ```
 
 **Returns:** `SessionManager` instance
@@ -2689,15 +2120,9 @@ OUTPUTS:
 
 Get the logger instance.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET logger TO roditClient.getLogger()
-  - FIELD: logger.info('Message', { component: 'MyComponent' })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const logger = roditClient.getLogger()
+logger.info('Message', { component: 'MyComponent' })
 ```
 
 **Returns:** `Logger` instance
@@ -2706,15 +2131,9 @@ OUTPUTS:
 
 Get the logging middleware.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET loggingmw TO roditClient.getLoggingMiddleware()
-  - DO: app.use(loggingmw)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const loggingmw = roditClient.getLoggingMiddleware()
+app.use(loggingmw)
 ```
 
 **Returns:** Express middleware function
@@ -2723,16 +2142,10 @@ OUTPUTS:
 
 Get the rate limiting middleware factory.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET ratelimitmw TO roditClient.getRateLimitMiddleware()
-  - SET limiter TO ratelimitmw(100, 900);  // 100 requests per 15 minutes
-  - DO: app.use(limiter)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const ratelimitmw = roditClient.getRateLimitMiddleware()
+const limiter = ratelimitmw(100, 900);  // 100 requests per 15 minutes
+app.use(limiter)
 ```
 
 **Parameters:**
@@ -2745,16 +2158,10 @@ OUTPUTS:
 
 Get the performance tracking service.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET performanceService TO roditClient.getPerformanceService()
-  - DO: performanceService.recordRequest(req)
-  - FIELD: performanceService.recordMetric('operation_duration', 150, { operation: 'db_query' })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const performanceService = roditClient.getPerformanceService()
+performanceService.recordRequest(req)
+performanceService.recordMetric('operation_duration', 150, { operation: 'db_query' })
 ```
 
 **Returns:** `PerformanceService` instance
@@ -2763,15 +2170,9 @@ OUTPUTS:
 
 Get the configuration service.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET config TO roditClient.getConfig()
-  - SET dbPath TO config.get('API_DEFAULT_OPTIONS.DB_PATH')
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const config = roditClient.getConfig()
+const dbPath = config.get('API_DEFAULT_OPTIONS.DB_PATH')
 ```
 
 **Returns:** `Config` instance
@@ -2780,14 +2181,8 @@ OUTPUTS:
 
 Get the webhook handler.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET webhookHandler TO roditClient.getWebhookHandler()
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const webhookHandler = roditClient.getWebhookHandler()
 ```
 
 **Returns:** `WebhookHandler` instance
@@ -2796,18 +2191,12 @@ OUTPUTS:
 
 Send a webhook notification.
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET result TO await roditClient.send_webhook({
-  - FIELD: event: 'user_action',
-  - FIELD: data: { userId: '123', action: 'login' },
-  - FIELD: isError: false
-  - DO: }, req)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const result = await roditClient.send_webhook({
+  event: 'user_action',
+  data: { userId: '123', action: 'login' },
+  isError: false
+}, req)
 ```
 
 **Parameters:**
@@ -2823,46 +2212,40 @@ OUTPUTS:
 
 The SDK exports these components for direct use:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: const {
-  - DO: RoditClient,           // Main client class
-  - DO: logger,                // Logger instance
-  - DO: stateManager,          // Authentication state manager
-  - DO: roditManager,          // RODiT credential manager
-  - DO: sessionManager,        // Session manager instance
-  - DO: blockchainService,     // Blockchain operations
-  - DO: utils,                 // Utility functions
-  - DO: config,                // Configuration service
-  - DO: performanceService,    // Performance tracking
-  - DO: authenticate_apicall,  // Authentication middleware
-  - DO: authenticate_logout,   // Logout authentication middleware (expired-token tolerant)
-  - DO: login_client,          // Login handler
-  - DO: logout_client,         // Logout handler
-  - DO: login_client_withnep413, // NEP-413 login
-  - DO: login_portal,          // Portal authentication
-  - DO: login_server,          // Outbound peer login
-  - DO: logout_server,         // Server logout
-  - DO: validate_jwt_token_be, // JWT validation
-  - DO: generate_jwt_token,    // JWT generation
-  - DO: validatepermissions,   // Permission middleware
-  - DO: webhookHandler,        // Webhook handler
-  - DO: versioningMiddleware,  // API versioning
-  - DO: loggingmw,             // Logging middleware
-  - DO: ratelimitmw,           // Rate limiting middleware
-  - DO: versionManager,        // Version manager
-  - DO: VersionManager,        // Version manager class
-  - DO: nearorg_rpc_timestamp  // Blockchain RPC timestamp function
-  - DO: } = require('@rodit/rodit-auth-be')
-  - NOTE: Note: Session storage configuration functions are available via:
-  - NOTE: const { setExpressSessionStore, configureStorageFromConfig,
-  - NOTE: createExpressSessionMiddleware, InMemorySessionStorage }
-  - NOTE: = require('@rodit/rodit-auth-be/lib/auth/sessionmanager');
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const {
+  RoditClient,           // Main client class
+  logger,                // Logger instance
+  stateManager,          // Authentication state manager
+  roditManager,          // RODiT credential manager
+  sessionManager,        // Session manager instance
+  blockchainService,     // Blockchain operations
+  utils,                 // Utility functions
+  config,                // Configuration service
+  performanceService,    // Performance tracking
+  authenticate_apicall,  // Authentication middleware
+  authenticate_logout,   // Logout authentication middleware (expired-token tolerant)
+  login_client,          // Login handler
+  logout_client,         // Logout handler
+  login_client_withnep413, // NEP-413 login
+  login_portal,          // Portal authentication
+  login_server,          // Outbound peer login
+  logout_server,         // Server logout
+  validate_jwt_token_be, // JWT validation
+  generate_jwt_token,    // JWT generation
+  validatepermissions,   // Permission middleware
+  webhookHandler,        // Webhook handler
+  versioningMiddleware,  // API versioning
+  loggingmw,             // Logging middleware
+  ratelimitmw,           // Rate limiting middleware
+  versionManager,        // Version manager
+  VersionManager,        // Version manager class
+  nearorg_rpc_timestamp  // Blockchain RPC timestamp function
+} = require('@rodit/rodit-auth-be')
+// Note: Session storage configuration functions are available via:
+// const { setExpressSessionStore, configureStorageFromConfig,
+  // createExpressSessionMiddleware, InMemorySessionStorage }
+// = require('@rodit/rodit-auth-be/lib/auth/sessionmanager');
 ```
 
 ### RODiT Token Metadata Fields
@@ -2894,319 +2277,265 @@ When you call `roditClient.getConfigOwnRodit()`, you get access to these metadat
 
 Always initialize the RoditClient once in your main application file:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: ✅ Good - Single initialization
-  - DO: async function startServer() {
-  - SET roditClient TO await RoditClient.create('server')
-  - DO: app.locals.roditClient = roditClient
-  - NOTE: Mount protected routes AFTER client initialization
-  - SET authenticate TO (req, res, next) => roditClient.authenticate(req, res, next)
-  - SET authorize TO (req, res, next) => roditClient.authorize(req, res, next)
-  - DO: app.use('/api/echo', authenticate, echoRoutes)
-  - DO: app.use('/api/cruda', authenticate, authorize, crudaRoutes)
-  - NOTE: ... rest of server setup
-  - }
-  - NOTE: ❌ Bad - Multiple initializations
-  - DO: app.get('/route1', async (req, res) => {
-  - SET client TO await RoditClient.create('server'); // Don't do this
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// ✅ Good - Single initialization
+async function startServer() {
+  const roditClient = await RoditClient.create('server')
+  app.locals.roditClient = roditClient
+  // Mount protected routes AFTER client initialization
+  const authenticate = (req, res, next) => roditClient.authenticate(req, res, next)
+  const authorize = (req, res, next) => roditClient.authorize(req, res, next)
+  app.use('/api/echo', authenticate, echoRoutes)
+  app.use('/api/cruda', authenticate, authorize, crudaRoutes)
+  // ... rest of server setup
+}
+// ❌ Bad - Multiple initializations
+app.get('/route1', async (req, res) => {
+  const client = await RoditClient.create('server'); // Don't do this
+})
 ```
 
 ### 2. Use App.locals for Shared Access
 
 Store the client in `app.locals` for access across all routes:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: ✅ Good - Shared instance via app.locals
-  - SET router TO express.Router()
-  - DO: router.get('/data', (req, res) => {
-  - SET client TO req.app.locals.roditClient
-  - SET logger TO client.getLogger()
-  - DO: logger.info('Processing request', {
-  - FIELD: component: 'DataRoute',
-  - FIELD: userId: req.user?.id,
-  - FIELD: requestId: req.requestId
-  - DO: })
-  - FIELD: res.json({ data: 'example' })
-  - DO: })
-  - NOTE: ❌ Bad - Creating new instances in routes
-  - DO: const { RoditClient } = require('@rodit/rodit-auth-be')
-  - SET client TO new RoditClient(); // Don't do this in routes
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// ✅ Good - Shared instance via app.locals
+const router = express.Router()
+router.get('/data', (req, res) => {
+  const client = req.app.locals.roditClient
+  const logger = client.getLogger()
+  logger.info('Processing request', {
+    component: 'DataRoute',
+    userId: req.user?.id,
+    requestId: req.requestId
+  })
+res.json({ data: 'example' })
+})
+// ❌ Bad - Creating new instances in routes
+const { RoditClient } = require('@rodit/rodit-auth-be')
+const client = new RoditClient(); // Don't do this in routes
 ```
 
 ### 3. Proper Error Handling
 
 Always wrap SDK operations in try-catch blocks and include request context:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: ✅ Good - Comprehensive error handling
-  - DO: app.get('/api/data', authenticate, async (req, res) => {
-  - SET startTime TO Date.now()
-  - SET client TO req.app.locals.roditClient
-  - SET logger TO client.getLogger()
-  - DO: try {
-  - SET data TO await processData(req.user.id)
-  - DO: logger.infoWithContext('Request successful', {
-  - FIELD: component: 'API',
-  - FIELD: method: 'getData',
-  - FIELD: userId: req.user.id,
-  - FIELD: requestId: req.requestId,
-  - FIELD: duration: Date.now() - startTime
-  - DO: })
-  - FIELD: res.json({ data, requestId: req.requestId })
-  - DO: } catch (error) {
-  - DO: logger.errorWithContext('Request failed', {
-  - FIELD: component: 'API',
-  - FIELD: method: 'getData',
-  - FIELD: userId: req.user.id,
-  - FIELD: requestId: req.requestId,
-  - FIELD: duration: Date.now() - startTime,
-  - FIELD: error: error.message
-  - DO: }, error)
-  - DO: res.status(500).json({
-  - FIELD: error: 'Internal server error',
-  - FIELD: requestId: req.requestId
-  - DO: })
-  - }
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// ✅ Good - Comprehensive error handling
+app.get('/api/data', authenticate, async (req, res) => {
+  const startTime = Date.now()
+  const client = req.app.locals.roditClient
+  const logger = client.getLogger()
+  try {
+    const data = await processData(req.user.id)
+    logger.infoWithContext('Request successful', {
+      component: 'API',
+      method: 'getData',
+      userId: req.user.id,
+      requestId: req.requestId,
+      duration: Date.now() - startTime
+    })
+  res.json({ data, requestId: req.requestId })
+} catch (error) {
+logger.errorWithContext('Request failed', {
+  component: 'API',
+  method: 'getData',
+  userId: req.user.id,
+  requestId: req.requestId,
+  duration: Date.now() - startTime,
+  error: error.message
+}, error)
+res.status(500).json({
+  error: 'Internal server error',
+  requestId: req.requestId
+})
+}
+})
 ```
 
 ### 4. Structured Logging
 
 Use consistent logging patterns with context:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: ✅ Good - Structured logging with context
-  - SET logger TO req.app.locals.roditClient.getLogger()
-  - DO: logger.infoWithContext('User action completed', {
-  - FIELD: component: 'UserService',
-  - FIELD: action: 'updateProfile',
-  - FIELD: userId: user.id,
-  - FIELD: requestId: req.requestId,
-  - FIELD: duration: Date.now() - startTime,
-  - FIELD: changes: Object.keys(updates)
-  - DO: })
-  - NOTE: For errors, pass the error object
-  - DO: logger.errorWithContext('Operation failed', {
-  - FIELD: component: 'UserService',
-  - FIELD: action: 'updateProfile',
-  - FIELD: userId: user.id,
-  - FIELD: requestId: req.requestId,
-  - FIELD: error: error.message
-  - DO: }, error)
-  - NOTE: ❌ Bad - Unstructured logging
-  - DO: console.log('User updated profile'); // Don't do this
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// ✅ Good - Structured logging with context
+const logger = req.app.locals.roditClient.getLogger()
+logger.infoWithContext('User action completed', {
+  component: 'UserService',
+  action: 'updateProfile',
+  userId: user.id,
+  requestId: req.requestId,
+  duration: Date.now() - startTime,
+  changes: Object.keys(updates)
+})
+// For errors, pass the error object
+logger.errorWithContext('Operation failed', {
+  component: 'UserService',
+  action: 'updateProfile',
+  userId: user.id,
+  requestId: req.requestId,
+  error: error.message
+}, error)
+// ❌ Bad - Unstructured logging
+console.log('User updated profile'); // Don't do this
 ```
 
 ### 5. Environment-Specific Configuration
 
 Use environment variables for sensitive and environment-specific values:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: ✅ Good - Environment-aware configuration
-  - SET config TO roditClient.getConfig()
-  - SET logLevel TO config.get('LOG_LEVEL', 'info')
-  - SET isMainDeploy TO ['info', 'warn', 'error'].includes(logLevel)
-  - NOTE: Main should use vault credentials
-  - CHECK CONDITION: if (isMainDeploy && process.env.RODIT_NEAR_CREDENTIALS_SOURCE !== 'vault') {
-  - DO: logger.warn('Main environment should use vault credentials', {
-  - FIELD: component: 'Configuration',
-  - FIELD: environment: 'main',
-  - FIELD: credentialsSource: process.env.RODIT_NEAR_CREDENTIALS_SOURCE || 'not-set'
-  - DO: })
-  - }
-  - NOTE: Configure session storage before initializing client
-  - CHECK CONDITION: if (isMainDeploy) {
-  - SET SQLiteStore TO require('connect-sqlite3')(require('express-session'))
-  - SET sessionStore TO new SQLiteStore({
-  - FIELD: db: 'sessions.db',
-  - FIELD: dir: config.get('API_DEFAULT_OPTIONS.DB_PATH', './data')
-  - DO: })
-  - DO: setExpressSessionStore(sessionStore)
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// ✅ Good - Environment-aware configuration
+const config = roditClient.getConfig()
+const logLevel = config.get('LOG_LEVEL', 'info')
+const isMainDeploy = ['info', 'warn', 'error'].includes(logLevel)
+// Main should use vault credentials
+if (isMainDeploy && process.env.RODIT_NEAR_CREDENTIALS_SOURCE !== 'vault') {
+  logger.warn('Main environment should use vault credentials', {
+    component: 'Configuration',
+    environment: 'main',
+    credentialsSource: process.env.RODIT_NEAR_CREDENTIALS_SOURCE || 'not-set'
+  })
+}
+// Configure session storage before initializing client
+if (isMainDeploy) {
+  const SQLiteStore = require('connect-sqlite3')(require('express-session'))
+  const sessionStore = new SQLiteStore({
+    db: 'sessions.db',
+    dir: config.get('API_DEFAULT_OPTIONS.DB_PATH', './data')
+  })
+setExpressSessionStore(sessionStore)
+}
 ```
 
 ### 6. Graceful Shutdown
 
 Implement proper shutdown handling:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: ✅ Good - Graceful shutdown
-  - SET shutdown TO async (signal) => {
-  - SET logger TO roditClient.getLogger()
-  - DO: logger.info('Shutting down gracefully', {
-  - FIELD: component: 'AppLifecycle',
-  - FIELD: signal: signal || 'unknown',
-  - FIELD: time: new Date().toISOString()
-  - DO: })
-  - CHECK CONDITION: if (server) {
-  - DO: server.close(async () => {
-  - DO: logger.info('HTTP server closed')
-  - NOTE: Close database connections
-  - CHECK CONDITION: if (db && typeof db.close === 'function') {
-  - WAIT FOR: db.close()
-  - DO: logger.info('Database connections closed')
-  - }
-  - NOTE: Close session store
-  - CHECK CONDITION: if (sessionStore && typeof sessionStore.close === 'function') {
-  - WAIT FOR: new Promise((resolve) => sessionStore.close(resolve))
-  - DO: logger.info('Session store closed')
-  - }
-  - DO: process.exit(0)
-  - DO: })
-  - NOTE: Force shutdown after timeout
-  - DO: setTimeout(() => {
-  - DO: logger.error('Forced shutdown after timeout')
-  - DO: process.exit(1)
-  - DO: }, 10000)
-  - }
-  - DO: }
-  - DO: process.on('SIGTERM', () => shutdown('SIGTERM'))
-  - DO: process.on('SIGINT', () => shutdown('SIGINT'))
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// ✅ Good - Graceful shutdown
+const shutdown = async (signal) => {
+  const logger = roditClient.getLogger()
+  logger.info('Shutting down gracefully', {
+    component: 'AppLifecycle',
+    signal: signal || 'unknown',
+    time: new Date().toISOString()
+  })
+if (server) {
+  server.close(async () => {
+    logger.info('HTTP server closed')
+    // Close database connections
+    if (db && typeof db.close === 'function') {
+      await db.close()
+      logger.info('Database connections closed')
+    }
+  // Close session store
+  if (sessionStore && typeof sessionStore.close === 'function') {
+    await new Promise((resolve) => sessionStore.close(resolve))
+    logger.info('Session store closed')
+  }
+process.exit(0)
+})
+// Force shutdown after timeout
+setTimeout(() => {
+  logger.error('Forced shutdown after timeout')
+  process.exit(1)
+}, 10000)
+}
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))
 ```
 
 ### 7. Request Context and Performance Tracking
 
 Always include request context and track performance:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: ✅ Good - Request context and performance tracking
-  - DO: app.use((req, res, next) => {
-  - DO: req.requestId = req.headers['x-request-id'] || ulid()
-  - DO: req.startTime = Date.now()
-  - DO: next()
-  - DO: })
-  - NOTE: Performance monitoring
-  - DO: app.use((req, res, next) => {
-  - SET performanceService TO roditClient.getPerformanceService()
-  - CHECK CONDITION: if (performanceService) {
-  - DO: performanceService.recordRequest(req)
-  - }
-  - DO: res.on('finish', () => {
-  - SET duration TO Date.now() - req.startTime
-  - CHECK CONDITION: if (performanceService) {
-  - DO: performanceService.recordMetric('request_duration_ms', duration, {
-  - FIELD: method: req.method,
-  - FIELD: path: req.path,
-  - FIELD: status: res.statusCode
-  - DO: })
-  - CHECK CONDITION: if (res.statusCode >= 400) {
-  - DO: performanceService.recordMetric('error_count', 1, {
-  - FIELD: method: req.method,
-  - FIELD: path: req.path,
-  - FIELD: status: res.statusCode
-  - DO: })
-  - }
-  - }
-  - DO: })
-  - DO: next()
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// ✅ Good - Request context and performance tracking
+app.use((req, res, next) => {
+  req.requestId = req.headers['x-request-id'] || ulid()
+  req.startTime = Date.now()
+  next()
+})
+// Performance monitoring
+app.use((req, res, next) => {
+  const performanceService = roditClient.getPerformanceService()
+  if (performanceService) {
+    performanceService.recordRequest(req)
+  }
+res.on('finish', () => {
+  const duration = Date.now() - req.startTime
+  if (performanceService) {
+    performanceService.recordMetric('request_duration_ms', duration, {
+      method: req.method,
+      path: req.path,
+      status: res.statusCode
+    })
+  if (res.statusCode >= 400) {
+    performanceService.recordMetric('error_count', 1, {
+      method: req.method,
+      path: req.path,
+      status: res.statusCode
+    })
+}
+}
+})
+next()
+})
 ```
 
 ### 8. Login Endpoint Protection
 
 **CRITICAL:** Never protect the login endpoint with authentication middleware:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: ✅ Good - Login endpoint without authentication
-  - DO: app.post('/api/login', (req, res) => {
-  - DO: req.logAction = 'login-attempt'
-  - RETURN roditClient.login_client(req, res)
-  - DO: })
-  - NOTE: ❌ Bad - Login endpoint with authentication (creates circular dependency)
-  - DO: app.post('/api/login', authenticate, (req, res) => {  // DON'T DO THIS
-  - RETURN roditClient.login_client(req, res)
-  - DO: })
-  - NOTE: ✅ Better - Logout endpoint with logout-specific authentication
-  - SET authenticateLogout TO (req, res, next) => roditClient.authenticateForLogout(req, res, next)
-  - DO: app.post('/api/logout', authenticateLogout, (req, res) => {
-  - DO: req.logAction = 'logout-attempt'
-  - RETURN roditClient.logout_client(req, res)
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// ✅ Good - Login endpoint without authentication
+app.post('/api/login', (req, res) => {
+  req.logAction = 'login-attempt'
+  roditClient.login_client(req, res)
+})
+// ❌ Bad - Login endpoint with authentication (creates circular dependency)
+app.post('/api/login', authenticate, (req, res) => {  // DON'T DO THIS
+  roditClient.login_client(req, res)
+})
+// ✅ Better - Logout endpoint with logout-specific authentication
+const authenticateLogout = (req, res, next) => roditClient.authenticateForLogout(req, res, next)
+app.post('/api/logout', authenticateLogout, (req, res) => {
+  req.logAction = 'logout-attempt'
+  roditClient.logout_client(req, res)
+})
 ```
 
 ### 9. Route Mounting Order
 
 Mount protected routes AFTER client initialization:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: ✅ Good - Correct order
-  - DO: async function startServer() {
-  - NOTE: 1. Configure session storage
-  - DO: setExpressSessionStore(sessionStore)
-  - NOTE: 2. Initialize client
-  - SET roditClient TO await RoditClient.create('server')
-  - DO: app.locals.roditClient = roditClient
-  - NOTE: 3. Create middleware
-  - SET authenticate TO (req, res, next) => roditClient.authenticate(req, res, next)
-  - SET authenticateLogout TO (req, res, next) => roditClient.authenticateForLogout(req, res, next)
-  - SET authorize TO (req, res, next) => roditClient.authorize(req, res, next)
-  - NOTE: 4. Mount public routes
-  - DO: app.post('/api/login', loginRoute)
-  - NOTE: 5. Mount protected routes
-  - DO: app.use('/api/echo', authenticate, echoRoutes)
-  - DO: app.use('/api/cruda', authenticate, authorize, crudaRoutes)
-  - DO: app.post('/api/logout', authenticateLogout, logoutRoute)
-  - NOTE: 6. Start server
-  - DO: app.listen(port)
-  - }
-  - NOTE: ❌ Bad - Routes mounted before client initialization
-  - DO: app.use('/api/echo', authenticate, echoRoutes);  // authenticate is undefined!
-  - SET roditClient TO await RoditClient.create('server')
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// ✅ Good - Correct order
+async function startServer() {
+  // 1. Configure session storage
+  setExpressSessionStore(sessionStore)
+  // 2. Initialize client
+  const roditClient = await RoditClient.create('server')
+  app.locals.roditClient = roditClient
+  // 3. Create middleware
+  const authenticate = (req, res, next) => roditClient.authenticate(req, res, next)
+  const authenticateLogout = (req, res, next) => roditClient.authenticateForLogout(req, res, next)
+  const authorize = (req, res, next) => roditClient.authorize(req, res, next)
+  // 4. Mount public routes
+  app.post('/api/login', loginRoute)
+  // 5. Mount protected routes
+  app.use('/api/echo', authenticate, echoRoutes)
+  app.use('/api/cruda', authenticate, authorize, crudaRoutes)
+  app.post('/api/logout', authenticateLogout, logoutRoute)
+  // 6. Start server
+  app.listen(port)
+}
+// ❌ Bad - Routes mounted before client initialization
+app.use('/api/echo', authenticate, echoRoutes);  // authenticate is undefined!
+const roditClient = await RoditClient.create('server')
 ```
 
 ## Troubleshooting
@@ -3218,24 +2547,18 @@ OUTPUTS:
 **Problem:** `roditClient.authenticate is not a function` or `Cannot read properties of undefined`
 
 **Solution:** Ensure client is initialized and stored in app.locals:
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: ✅ Correct - Check client availability
-  - SET authenticate TO (req, res, next) => {
-  - SET client TO req.app.locals.roditClient
-  - CHECK CONDITION: if (!client) {
-  - RETURN res.status(503).json({ error: 'Authentication service unavailable' })
-  - }
-  - RETURN client.authenticate(req, res, next)
-  - DO: }
-  - NOTE: ❌ Wrong - Direct access without checking
-  - SET authenticate TO (req, res, next) => roditClient.authenticate(req, res, next)
-  - NOTE: This fails if roditClient is not initialized yet
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// ✅ Correct - Check client availability
+const authenticate = (req, res, next) => {
+  const client = req.app.locals.roditClient
+  if (!client) {
+    res.status(503).json({ error: 'Authentication service unavailable' })
+  }
+client.authenticate(req, res, next)
+}
+// ❌ Wrong - Direct access without checking
+const authenticate = (req, res, next) => roditClient.authenticate(req, res, next)
+// This fails if roditClient is not initialized yet
 ```
 
 #### 2. Configuration Not Found
@@ -3243,39 +2566,27 @@ OUTPUTS:
 **Problem:** `Failed to initialize RODiT configuration`
 
 **Solutions:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Check environment variables
-  - DO: echo $RODIT_NEAR_CREDENTIALS_SOURCE  # Should be 'vault' or 'file'
-  - DO: echo $VAULT_ENDPOINT
-  - DO: echo $NEAR_CONTRACT_ID
-  - DO: echo $SERVICE_NAME
-  - NOTE: For vault-based credentials
-  - DO: export RODIT_NEAR_CREDENTIALS_SOURCE=vault
-  - FIELD: export VAULT_ENDPOINT=https://vault.example.com
-  - DO: export VAULT_ROLE_ID=your-role-id
-  - DO: export VAULT_SECRET_ID=your-secret-id
-  - NOTE: For file-based credentials (development)
-  - DO: export RODIT_NEAR_CREDENTIALS_SOURCE=file
-  - DO: export CREDENTIALS_FILE_PATH=./credentials/rodit-credentials.json
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+// Check environment variables
+echo $RODIT_NEAR_CREDENTIALS_SOURCE  # Should be 'vault' or 'file'
+echo $VAULT_ENDPOINT
+echo $NEAR_CONTRACT_ID
+echo $SERVICE_NAME
+// For vault-based credentials
+export RODIT_NEAR_CREDENTIALS_SOURCE=vault
+export VAULT_ENDPOINT=https://vault.example.com
+export VAULT_ROLE_ID=your-role-id
+export VAULT_SECRET_ID=your-secret-id
+// For file-based credentials (development)
+export RODIT_NEAR_CREDENTIALS_SOURCE=file
+export CREDENTIALS_FILE_PATH=./credentials/rodit-credentials.json
 ```
 
 **Verify configuration:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET config TO roditClient.getConfig()
-  - FIELD: console.log('NEAR_CONTRACT_ID:', config.get('NEAR_CONTRACT_ID'))
-  - FIELD: console.log('SERVICE_NAME:', config.get('SERVICE_NAME'))
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const config = roditClient.getConfig()
+console.log('NEAR_CONTRACT_ID:', config.get('NEAR_CONTRACT_ID'))
+console.log('SERVICE_NAME:', config.get('SERVICE_NAME'))
 ```
 
 #### 3. Missing App.locals Client
@@ -3283,32 +2594,26 @@ OUTPUTS:
 **Problem:** `RoditClient not available in app.locals` or `Cannot read properties of undefined (reading 'roditClient')`
 
 **Solution:** Ensure client is stored during initialization:
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: async function startServer() {
-  - DO: try {
-  - NOTE: Initialize client
-  - SET roditClient TO await RoditClient.create('server')
-  - NOTE: Store in app.locals BEFORE mounting routes
-  - DO: app.locals.roditClient = roditClient
-  - NOTE: Verify it's stored
-  - CHECK CONDITION: if (!app.locals.roditClient) {
-  - DO: throw new Error('Failed to store roditClient in app.locals')
-  - }
-  - NOTE: Now mount routes
-  - SET authenticate TO (req, res, next) => roditClient.authenticate(req, res, next)
-  - DO: app.use('/api/protected', authenticate, protectedRoutes)
-  - DO: app.listen(port)
-  - DO: } catch (error) {
-  - FIELD: console.error('Server initialization failed:', error)
-  - DO: process.exit(1)
-  - }
-  - }
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+async function startServer() {
+  try {
+    // Initialize client
+    const roditClient = await RoditClient.create('server')
+    // Store in app.locals BEFORE mounting routes
+    app.locals.roditClient = roditClient
+    // Verify it's stored
+    if (!app.locals.roditClient) {
+      throw new Error('Failed to store roditClient in app.locals')
+    }
+  // Now mount routes
+  const authenticate = (req, res, next) => roditClient.authenticate(req, res, next)
+  app.use('/api/protected', authenticate, protectedRoutes)
+  app.listen(port)
+} catch (error) {
+console.error('Server initialization failed:', error)
+process.exit(1)
+}
+}
 ```
 
 #### 4. Permission Denied Errors
@@ -3316,24 +2621,18 @@ OUTPUTS:
 **Problem:** Routes return 403 Forbidden
 
 **Debug steps:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Check token permissions
-  - SET configObject TO await roditClient.getConfigOwnRodit()
-  - SET permissionedRoutes TO JSON.parse(
-  - DO: configObject.own_rodit.metadata.permissioned_routes || '{}'
-  - DO: )
-  - FIELD: console.log('Configured permissions:', permissionedRoutes)
-  - NOTE: Check specific operation
-  - SET hasPermission TO roditClient.isOperationPermitted('POST', '/api/cruda/create')
-  - FIELD: console.log('Has permission:', hasPermission)
-  - NOTE: Verify route path matches exactly
-  - FIELD: console.log('Requested path:', req.path);  // Must match permission key exactly
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Check token permissions
+const configObject = await roditClient.getConfigOwnRodit()
+const permissionedRoutes = JSON.parse(
+configObject.own_rodit.metadata.permissioned_routes || '{}'
+)
+console.log('Configured permissions:', permissionedRoutes)
+// Check specific operation
+const hasPermission = roditClient.isOperationPermitted('POST', '/api/cruda/create')
+console.log('Has permission:', hasPermission)
+// Verify route path matches exactly
+console.log('Requested path:', req.path);  // Must match permission key exactly
 ```
 
 **Common issues:**
@@ -3349,24 +2648,18 @@ OUTPUTS:
 **Cause:** JWT token contains session ID that doesn't exist in session storage
 
 **Solutions:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Verify session storage is configured
-  - SET sessionManager TO roditClient.getSessionManager()
-  - SET storageInfo TO await sessionManager.getStorageInfo()
-  - FIELD: console.log('Storage type:', storageInfo.storageType)
-  - FIELD: console.log('Active sessions:', storageInfo.sessionCount)
-  - NOTE: Check if token is invalidated
-  - SET isInvalidated TO await sessionManager.isTokenInvalidated(jwtToken)
-  - FIELD: console.log('Token invalidated:', isInvalidated)
-  - NOTE: Enumerate sessions via storage for debugging
-  - SET allSessions TO await sessionManager.storage.getAll()
-  - FIELD: console.log('Active sessions:', allSessions.filter(s => s.status === 'active').length)
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Verify session storage is configured
+const sessionManager = roditClient.getSessionManager()
+const storageInfo = await sessionManager.getStorageInfo()
+console.log('Storage type:', storageInfo.storageType)
+console.log('Active sessions:', storageInfo.sessionCount)
+// Check if token is invalidated
+const isInvalidated = await sessionManager.isTokenInvalidated(jwtToken)
+console.log('Token invalidated:', isInvalidated)
+// Enumerate sessions via storage for debugging
+const allSessions = await sessionManager.storage.getAll()
+console.log('Active sessions:', allSessions.filter(s => s.status === 'active').length)
 ```
 
 **Common causes:**
@@ -3382,47 +2675,29 @@ OUTPUTS:
 **Problem:** Logs not appearing in Loki or console
 
 **Solutions:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Check logging configuration
-  - DO: export LOG_LEVEL=debug  # Enable debug logging
-  - FIELD: export LOKI_URL=https://loki.example.com:3100
-  - FIELD: export LOKI_BASIC_AUTH=username:password
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+// Check logging configuration
+export LOG_LEVEL=debug  # Enable debug logging
+export LOKI_URL=https://loki.example.com:3100
+export LOKI_BASIC_AUTH=username:password
 ```
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - NOTE: Test logger directly
-  - SET logger TO roditClient.getLogger()
-  - FIELD: logger.info('Test message', { component: 'Test' })
-  - FIELD: logger.error('Test error', { component: 'Test' })
-  - NOTE: Check if Loki transport is configured
-  - SET transports TO logger.transports
-  - FIELD: console.log('Logger transports:', transports.map(t => t.name))
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+// Test logger directly
+const logger = roditClient.getLogger()
+logger.info('Test message', { component: 'Test' })
+logger.error('Test error', { component: 'Test' })
+// Check if Loki transport is configured
+const transports = logger.transports
+console.log('Logger transports:', transports.map(t => t.name))
 ```
 
 ### Debug Mode
 
 Enable debug logging for troubleshooting:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: export LOG_LEVEL=debug  # Use 'debug' or 'trace' for development mode
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```bash
+export LOG_LEVEL=debug  # Use 'debug' or 'trace' for development mode
 ```
 
 This will provide detailed information about:
@@ -3435,96 +2710,84 @@ This will provide detailed information about:
 - Request/response details
 
 **Example debug output:**
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - SET logger TO roditClient.getLogger()
-  - NOTE: Enable debug logging programmatically
-  - DO: logger.level = 'debug'
-  - NOTE: Debug authentication
-  - DO: logger.debug('Authenticating request', {
-  - FIELD: component: 'Authentication',
-  - FIELD: hasAuthHeader: !!req.headers.authorization,
-  - FIELD: path: req.path,
-  - FIELD: method: req.method
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+const logger = roditClient.getLogger()
+// Enable debug logging programmatically
+logger.level = 'debug'
+// Debug authentication
+logger.debug('Authenticating request', {
+  component: 'Authentication',
+  hasAuthHeader: !!req.headers.authorization,
+  path: req.path,
+  method: req.method
+})
 ```
 
 ### Health Checks
 
 Implement comprehensive health check endpoints:
 
-```text
-PSEUDOCODE
-INPUTS:
-  - Use values defined by the surrounding section/context.
-STEPS:
-  - DO: app.get('/health', async (req, res) => {
-  - DO: try {
-  - SET client TO req.app.locals.roditClient
-  - CHECK CONDITION: if (!client) {
-  - RETURN res.status(503).json({
-  - FIELD: status: 'error',
-  - FIELD: message: 'RoditClient not available'
-  - DO: })
-  - }
-  - SET configObject TO await client.getConfigOwnRodit()
-  - SET sessionManager TO client.getSessionManager()
-  - SET performanceService TO client.getPerformanceService()
-  - SET health TO {
-  - FIELD: status: 'healthy',
-  - FIELD: timestamp: new Date().toISOString(),
-  - FIELD: logLevel: config.get('LOG_LEVEL', 'info'),
-  - FIELD: components: {
-  - FIELD: roditClient: !!client,
-  - FIELD: configuration: !!(configObject && configObject.own_rodit),
-  - FIELD: sessionManager: !!sessionManager,
-  - FIELD: performanceService: !!performanceService
-  - DO: },
-  - FIELD: metrics: {
-  - FIELD: activeSessions: await sessionManager.getActiveSessionCount(),
-  - FIELD: totalRequests: performanceService.getRequestCount(),
-  - FIELD: errorCount: performanceService.getErrorCount()
-  - DO: },
-  - FIELD: roditToken: {
-  - FIELD: tokenId: configObject?.own_rodit?.token_id,
-  - FIELD: apiUrl: configObject?.own_rodit?.metadata?.subjectuniqueidentifier_url,
-  - FIELD: jwtDuration: configObject?.own_rodit?.metadata?.jwt_duration
-  - }
-  - DO: }
-  - DO: res.json(health)
-  - DO: } catch (error) {
-  - DO: res.status(503).json({
-  - FIELD: status: 'error',
-  - FIELD: message: error.message,
-  - FIELD: timestamp: new Date().toISOString()
-  - DO: })
-  - }
-  - DO: })
-  - NOTE: Readiness check (for Kubernetes)
-  - DO: app.get('/ready', async (req, res) => {
-  - SET client TO req.app.locals.roditClient
-  - CHECK CONDITION: if (!client) {
-  - RETURN res.status(503).json({ ready: false })
-  - }
-  - DO: try {
-  - SET configObject TO await client.getConfigOwnRodit()
-  - SET ready TO !!(configObject && configObject.own_rodit)
-  - FIELD: res.status(ready ? 200 : 503).json({ ready })
-  - DO: } catch (error) {
-  - FIELD: res.status(503).json({ ready: false, error: error.message })
-  - }
-  - DO: })
-  - NOTE: Liveness check (for Kubernetes)
-  - DO: app.get('/live', (req, res) => {
-  - FIELD: res.json({ alive: true })
-  - DO: })
-OUTPUTS:
-  - Produces the section's intended result using equivalent logic.
+```javascript
+app.get('/health', async (req, res) => {
+  try {
+    const client = req.app.locals.roditClient
+    if (!client) {
+      res.status(503).json({
+        status: 'error',
+        message: 'RoditClient not available'
+      })
+  }
+const configObject = await client.getConfigOwnRodit()
+const sessionManager = client.getSessionManager()
+const performanceService = client.getPerformanceService()
+const health = {
+  status: 'healthy',
+  timestamp: new Date().toISOString(),
+  logLevel: config.get('LOG_LEVEL', 'info'),
+  components: {
+    roditClient: !!client,
+    configuration: !!(configObject && configObject.own_rodit),
+    sessionManager: !!sessionManager,
+    performanceService: !!performanceService
+  },
+metrics: {
+  activeSessions: await sessionManager.getActiveSessionCount(),
+  totalRequests: performanceService.getRequestCount(),
+  errorCount: performanceService.getErrorCount()
+},
+roditToken: {
+  tokenId: configObject?.own_rodit?.token_id,
+  apiUrl: configObject?.own_rodit?.metadata?.subjectuniqueidentifier_url,
+  jwtDuration: configObject?.own_rodit?.metadata?.jwt_duration
+}
+}
+res.json(health)
+} catch (error) {
+res.status(503).json({
+  status: 'error',
+  message: error.message,
+  timestamp: new Date().toISOString()
+})
+}
+})
+// Readiness check (for Kubernetes)
+app.get('/ready', async (req, res) => {
+  const client = req.app.locals.roditClient
+  if (!client) {
+    res.status(503).json({ ready: false })
+  }
+try {
+  const configObject = await client.getConfigOwnRodit()
+  const ready = !!(configObject && configObject.own_rodit)
+  res.status(ready ? 200 : 503).json({ ready })
+} catch (error) {
+res.status(503).json({ ready: false, error: error.message })
+}
+})
+// Liveness check (for Kubernetes)
+app.get('/live', (req, res) => {
+  res.json({ alive: true })
+})
 ```
 
 ### Support

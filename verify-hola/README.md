@@ -2,6 +2,8 @@
 
 Verify-before-execute tooling for IdentyClaw HOLA lines.
 
+For NEAR account enrollment, see [gennearaccount](https://github.com/discernible-io/gennearaccount). For in-gateway HOLA tools, see [openclaw-identyclaw-plugin](https://github.com/discernible-io/openclaw-identyclaw-plugin).
+
 ## Recommended: direct NEAR RPC (`--rpc`)
 
 No IdentyClaw API in the verify path — your machine reads chain state via FastNear (or any NEAR RPC).
