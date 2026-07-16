@@ -26,7 +26,11 @@ const {
 
 const {
   validate_jwt_token_be,
-  generate_jwt_token
+  generate_jwt_token,
+  normalizeUrlWithoutPort,
+  isNonEmptyUrlClaim,
+  isFederatedRoditLogin,
+  validateFederatedLoginTarget,
 } = require('./lib/auth/tokenservice');
 
 const validatepermissions = require('./lib/middleware/validatepermissionsmw');
@@ -1033,6 +1037,7 @@ class RoditClient {
    *
    * @param {Object} [lsoptions] - Optional settings
    * @param {string} [lsoptions.loginPath] - Login path (default /api/login)
+   * @param {string} [lsoptions.apiEndpoint] - Federated API URL to authenticate against (MITM-checked via JWT rodit_subjectuniqueidentifier_url)
    * @returns {Promise<Object>} Login result with token
    */
   async login_server(lsoptions = {}) {
@@ -1043,7 +1048,10 @@ class RoditClient {
       component: 'RoditClient',
       method: 'login_server',
       requestId,
-      lsoptions: { loginPath: lsoptions.loginPath }
+      lsoptions: {
+        loginPath: lsoptions.loginPath,
+        apiEndpoint: lsoptions.apiEndpoint,
+      }
     });
 
     try {
@@ -1929,6 +1937,10 @@ module.exports = {
   logout_server,
   validate_jwt_token_be,
   generate_jwt_token,
+  normalizeUrlWithoutPort,
+  isNonEmptyUrlClaim,
+  isFederatedRoditLogin,
+  validateFederatedLoginTarget,
   validatepermissions,
   webhookHandler,
   // Webhook identity + session helpers (key travels with the webhook; trust is

@@ -2,6 +2,30 @@
 
 All notable changes to `@rodit/rodit-auth-be` are documented here.
 
+## [9.13.0] — 2026-07-15
+
+### Added
+
+- **Federated login across APIs in the same SR/CR family.** A client RODiT
+  issued for API A can log into API B via
+  `login_server({ apiEndpoint: '<federated URL>' })`. Mutual auth remains
+  optional; federation is login → remint a local JWT (foreign JWTs are not
+  accepted without re-login).
+- **JWT claim `rodit_subjectuniqueidentifier_url` (always present).** Same
+  unset-as-`null` rule as `config_*` in 9.12:
+  - Same-API login: claim is `null`; `iss` = receiving server URL
+  - Federated login: claim = federated API URL; `iss` = client home
+    `subjectuniqueidentifier_url`
+  - Server validation treats non-empty claim strings as federated JWTs
+    (`isNonEmptyUrlClaim`); renewal always copies/normalizes to `null` or the
+    URL (9.12 tokens without the claim renew into `null`)
+- **Client MITM check.** After crypto validation, `login_server` verifies that
+  a federated JWT's `rodit_subjectuniqueidentifier_url` matches the intended
+  `apiEndpoint` and that `iss` matches the client home URL. Failures:
+  `FEDERATED_ISSUER_MISSING`, `FEDERATED_ISSUER_MISMATCH`.
+- **Exported helpers:** `normalizeUrlWithoutPort`, `isNonEmptyUrlClaim`,
+  `isFederatedRoditLogin`, `validateFederatedLoginTarget`.
+
 ## [9.12.0] — 2026-07-02
 
 ### Fixed

@@ -14,7 +14,8 @@ const nacl = require("tweetnacl");
 const { 
   validate_jwt_token_be,
   generate_jwt_token,
-  tokenService
+  validateFederatedLoginTarget,
+  normalizeUrlWithoutPort,
 } = require("../auth/tokenservice");
 // Import specific functions from authentication.js to avoid circular dependencies
 // Import specific functions from authentication.js to avoid circular dependencies
@@ -1879,6 +1880,7 @@ async function login_portal(config_own_rodit, port, options = {}) {
    * @param {Object} config_own_rodit - Configuration object containing own_rodit and private key
    * @param {Object} [options] - Optional settings
    * @param {string} [options.loginPath] - HTTP path (default /api/login)
+   * @param {string} [options.apiEndpoint] - Federated API base URL to log into (defaults to own subjectuniqueidentifier_url)
    * @param {number} [options.timestamp] - Unix seconds used for signature generation (if omitted, fetched from peer /api/login/timestamp)
    * @param {string} [options.accountId] - Explicit NEAR account for outbound login when token id absent
    * @param {string} [options.timestampPath] - Timestamp endpoint path (default /api/login/timestamp)
@@ -1931,7 +1933,9 @@ async function login_portal(config_own_rodit, port, options = {}) {
         return { error: "Error 0111: Client configuration not initialized" };
       }
 
-      const apiendpoint = config_own_rodit.own_rodit?.metadata?.subjectuniqueidentifier_url;
+      const apiendpoint =
+        options.apiEndpoint ??
+        config_own_rodit.own_rodit?.metadata?.subjectuniqueidentifier_url;
       const loginPath =
         options.loginPath ??
         config_own_rodit.login_rodit_path ??
@@ -1944,7 +1948,16 @@ async function login_portal(config_own_rodit, port, options = {}) {
         requestId,
         apiEndpoint: apiendpoint,
         loginUrl,
-        source: config_own_rodit.own_rodit?.metadata?.subjectuniqueidentifier_url ? "metadata" : "config",
+        federatedLogin:
+          normalizeUrlWithoutPort(apiendpoint) !==
+          normalizeUrlWithoutPort(
+            config_own_rodit.own_rodit?.metadata?.subjectuniqueidentifier_url
+          ),
+        source: options.apiEndpoint
+          ? "options.apiEndpoint"
+          : config_own_rodit.own_rodit?.metadata?.subjectuniqueidentifier_url
+            ? "metadata"
+            : "config",
       });
 
       const roditid = normalizeOptionalLoginString(own_rodit?.token_id);
@@ -2156,6 +2169,60 @@ async function login_portal(config_own_rodit, port, options = {}) {
             validationError: validationResult.error,
             requestId
           };
+        }
+
+        const federatedCheck = validateFederatedLoginTarget(
+          validationResult.payload,
+          apiendpoint,
+          config_own_rodit.own_rodit?.metadata?.subjectuniqueidentifier_url
+        );
+
+        if (!federatedCheck.ok) {
+          const duration = Date.now() - startTime;
+
+          logger.error("Federated login issuer check failed", {
+            component: "AuthenticationService",
+            method,
+            requestId,
+            duration,
+            errorCode: federatedCheck.errorCode,
+            errorMessage: federatedCheck.errorMessage,
+            intendedApiEndpoint: apiendpoint,
+            jwtIss: validationResult.payload?.iss,
+            jwtFederatedIssuer:
+              validationResult.payload?.rodit_subjectuniqueidentifier_url,
+          });
+
+          logger.metric("login_duration_ms", duration, {
+            component: "AuthenticationService",
+            success: false,
+            error: federatedCheck.errorCode,
+          });
+          logger.metric("login_errors_total", 1, {
+            component: "AuthenticationService",
+            error: federatedCheck.errorCode,
+          });
+
+          return {
+            error:
+              federatedCheck.errorMessage ||
+              "Federated login issuer verification failed",
+            errorCode: federatedCheck.errorCode,
+            failureReason: federatedCheck.errorCode,
+            requestId,
+          };
+        }
+
+        if (federatedCheck.federated) {
+          logger.info("Federated login issuer verified", {
+            component: "AuthenticationService",
+            method,
+            requestId,
+            intendedApiEndpoint: apiendpoint,
+            clientHomeIssuer: validationResult.payload?.iss,
+            federatedIssuer:
+              validationResult.payload?.rodit_subjectuniqueidentifier_url,
+          });
         }
 
         const peer_base64url_jwk_public_key = Buffer.from(peer_rodit.owner_id, "hex").toString("base64url");

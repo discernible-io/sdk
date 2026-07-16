@@ -244,10 +244,6 @@ const FALLBACK_DEFAULTS = {
     // - true: allow relaxed validation checks
     // - false: enforce strict validation checks
     RELAXED_SESSION_VALIDATION: true,
-    // Session middleware secret used for signing session data.
-    // Options:
-    // - any non-empty string (recommended: long, random secret on main)
-    SESSION_SECRET: "HMAC-session-secret-is-not-set",
     // Webhook outbound TLS verification.
     // Options:
     // - true: skip TLS certificate verification (for controlled/self-signed setups)
@@ -397,16 +393,6 @@ const VALIDATION_RULES = {
     required: false,
     type: 'boolean',
     validate: () => null
-  },
-  'SECURITY_OPTIONS.SESSION_SECRET': {
-    required: false,
-    type: 'string',
-    validate: (value) => {
-      if (!value || value.length === 0) {
-        return 'SECURITY_OPTIONS.SESSION_SECRET cannot be empty when provided';
-      }
-      return null;
-    }
   },
   'SECURITY_OPTIONS.FALLBACK_JWT_DURATION': {
     required: false,

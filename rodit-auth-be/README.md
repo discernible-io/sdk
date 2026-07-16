@@ -2,11 +2,13 @@
 
 A comprehensive Node.js SDK for implementing RODiT-based mutual authentication, authorization, self-configuration, and session management in Express.js applications.
 
-**Version:** 1.1.0  
+**Version:** 9.13.0  
 **License:** Proprietary  
 **Author:** Discernible IO
 
-**Login `POST` /api/login:** Use **`accountid`**, **`timestamp`**, and **`base64url_signature`**. Sign UTF-8 bytes of `accountid + timestamp_iso`, and reject deprecated keys such as **`signature`** and **`account_id`**. See [CHANGELOG.md](./CHANGELOG.md).
+**Login `POST` /api/login:** Use **`accountid`** (or **`roditid`**), **`timestamp`**, and **`base64url_signature`**. Sign UTF-8 bytes of `identifier + timestamp_iso`, and reject deprecated keys such as **`signature`** and **`account_id`**. See [CHANGELOG.md](./CHANGELOG.md).
+
+**9.13 federated login:** A client RODiT issued for API A can log into API B in the same SR/CR family via `login_server({ apiEndpoint })`. See [Federated login](#federated-login-same-family-different-api-url).
 
 ## Table of Contents
 
@@ -15,6 +17,7 @@ A comprehensive Node.js SDK for implementing RODiT-based mutual authentication, 
 - [Installation & Setup](#installation--setup)
 - [Authentication](#authentication)
   - [Login Mode Control](#login-mode-control)
+  - [Federated login](#federated-login-same-family-different-api-url)
 - [Authorization & Permissions](#authorization--permissions)
 - [Session Management](#session-management)
   - [Session lifetime and TTL](#session-lifetime-and-ttl)
@@ -276,18 +279,23 @@ Rejected keys (HTTP 400, `LOGIN_PAYLOAD_DEPRECATED`): **`signature`** and **`acc
 
 #### Authentication Flow
 
-1. **Client sends RODiT credentials** - RODiT ID, timestamp, and cryptographic signature
+1. **Client sends RODiT credentials** - RODiT ID or account ID, timestamp, and cryptographic signature
 2. **SDK verifies signature** - Validates against blockchain records (NEAR Protocol)
 3. **Session created** - New session stored in session manager
-4. **JWT token issued** - Token contains session ID and user claims
+4. **JWT token issued** - Token contains session ID, user claims, and always
+   `rodit_subjectuniqueidentifier_url` (`null` same-API; federated API URL when
+   peer home ≠ issuing server). See [Federated login](#federated-login-same-family-different-api-url).
 5. **Subsequent requests** - Client sends JWT in `Authorization: Bearer <token>` header
-6. **Token validation** - SDK validates JWT and checks session status
+6. **Token validation** - SDK validates JWT (issuer rules differ for federated vs
+   same-API) and checks session status
 
 Security hardening in current implementation:
 - JWT compact parts must be canonical base64url (non-canonical encodings are rejected).
 - Session registration is enforced during JWT validation (unknown/inactive/expired sessions are rejected).
 - Server session length defaults to `SECURITY_OPTIONS.SESSION_TTL_SECONDS` (5200 s); see [Session lifetime and TTL](#session-lifetime-and-ttl).
 - Token renewal uses `sessionManager` for session checks and updates (no `stateManager` session mutations).
+- Federated `login_server({ apiEndpoint })` rejects MITM when the signed
+  `rodit_subjectuniqueidentifier_url` does not match the intended endpoint.
 
 ### Login Implementation
 
@@ -419,6 +427,99 @@ Add repository variable:
 - **Name**: `SECURITY_OPTIONS_LOGIN_MODE`
 - **Value**: `partner` | `promiscuous` | `p2p`
 
+#### Federated login (same family, different API URL)
+
+Enable a client RODiT issued for API A (`subjectuniqueidentifier_url`) to log
+into API B in the **same SR/CR family**. Federation is **login → remint a local
+JWT** on B; foreign JWTs are not accepted without re-login. Mutual auth remains
+optional (no reverse `login_server` required).
+
+##### Client call
+
+```js
+const { RoditClient } = require('@rodit/rodit-auth-be');
+
+const client = await RoditClient.create('client');
+await client.login_server({
+  apiEndpoint: 'https://api-b.example.com', // federated API; omit for home API
+});
+```
+
+When `apiEndpoint` is omitted, login targets the client's own
+`subjectuniqueidentifier_url` (same-API path).
+
+##### JWT claim contract
+
+Unset fields are **always present as `null`** (same rule as `config_*` in 9.12).
+Do not omit `rodit_subjectuniqueidentifier_url` on same-API tokens.
+
+| Claim | Always present? | Same-API login | Federated login |
+|-------|-----------------|----------------|-----------------|
+| `iss` | yes | peer home URL (= server URL in practice) | **client home** `subjectuniqueidentifier_url` |
+| `aud` | yes | server `owner_id` | server `owner_id` (federated API) |
+| `rodit_subjectuniqueidentifier_url` | **yes** | **`null`** | **federated API** `subjectuniqueidentifier_url` |
+| `config_iso639` / `config_iso3166` / `config_iso15924` / `config_timeoptions` | yes | `null` | `null` |
+
+A JWT is treated as federated when:
+
+```js
+rodit_subjectuniqueidentifier_url != null
+  && String(rodit_subjectuniqueidentifier_url).trim() !== ""
+```
+
+(Helper: `isNonEmptyUrlClaim`.)
+
+##### Server validation
+
+After signature verification:
+
+- **Federated JWT** — `rodit_subjectuniqueidentifier_url` must equal this
+  server's URL; `iss` must equal the login client's home URL (resolved from
+  `sub` via on-chain RODiT).
+- **Same-API / 9.12 tokens** — claim null/absent → `iss` must equal this
+  server's URL (unchanged 9.12 issuer rule).
+- **`aud`**, family match, and `LOGIN_MODE` are unchanged.
+
+##### Client MITM check
+
+After crypto validation of the received JWT, `login_server` checks that a
+federated attempt (`apiEndpoint` ≠ client home) has:
+
+1. Non-empty `rodit_subjectuniqueidentifier_url`
+2. That claim equal to the intended `apiEndpoint`
+3. `iss` equal to the client home URL
+
+| Failure | `errorCode` |
+|---------|-------------|
+| Null/empty federated claim | `FEDERATED_ISSUER_MISSING` |
+| Claim or `iss` mismatch | `FEDERATED_ISSUER_MISMATCH` |
+
+##### Renewal
+
+- Federated JWT renewals preserve the non-null claim string.
+- Tokens minted by 9.12 (no claim) renew into `rodit_subjectuniqueidentifier_url: null`.
+
+##### Operational prerequisites (outside SDK)
+
+- Federated server RODiT shares the same `bc=;sc=;id=SR;id=CR` family.
+- Federated domain has DNS trust TXT (keyed off **own**
+  `subjectuniqueidentifier_url`).
+- Client calls `login_server({ apiEndpoint: '<federated URL>' })`.
+- Client→server federation needs `LOGIN_MODE=partner` (or `promiscuous`); a
+  server RODiT logging into a federated API under `partner` is still rejected
+  by existing role-separation policy.
+
+##### Helpers (package root)
+
+```js
+const {
+  normalizeUrlWithoutPort,
+  isNonEmptyUrlClaim,
+  isFederatedRoditLogin,
+  validateFederatedLoginTarget,
+} = require('@rodit/rodit-auth-be');
+```
+
 #### Logging and Monitoring
 
 **Successful Login:**
@@ -453,12 +554,19 @@ Add repository variable:
 2. **Promiscuous Mode**: Use only when you need to accept both types of authentication
 3. **P2P Mode**: Use when building peer-to-peer systems where only same-provider authentication is needed
 4. **Policy Enforcement**: Rejections are logged with clear reasons for audit trails
+5. **Federated MITM**: Always pass the real peer URL as `apiEndpoint`; the client
+   verifies the signed federated issuer claim against that URL after login
 
 #### Troubleshooting
 
 **Login Rejected with "policy_rejected":**
 - If you see "PEER login rejected" and need to accept peer logins, set mode to `promiscuous` or `p2p`
 - If you see "PARTNER login rejected" and need to accept partner logins, set mode to `promiscuous` or `partner`
+
+**Federated login failures:**
+- `FEDERATED_ISSUER_MISSING` — JWT has null/empty `rodit_subjectuniqueidentifier_url` but `apiEndpoint` differs from client home (peer may be pre-9.13, or claim omitted incorrectly)
+- `FEDERATED_ISSUER_MISMATCH` — claim or `iss` does not match intended `apiEndpoint` / client home (wrong URL or MITM)
+- `Error 005: Invalid federated issuer` on the server — JWT federated claim is not this server's `subjectuniqueidentifier_url`
 
 **Check Current Mode:**
 Look for the log message during authentication:
@@ -2014,17 +2122,30 @@ const result = await roditClient.login_portal(configObject, 8443)
 
 ##### login_server(options)
 
-Authenticate to a peer API using account-based login semantics: sign **`accountid + timestamp_iso`** and POST **`{ accountid, timestamp, base64url_signature }`**.
+Authenticate to a peer API (home or federated). Signs **`roditid`** or **`accountid`** + canonical `timestamp_iso` and POSTs the login body expected by the peer's `login_client`.
 
-Optional: `options.timestamp`, `options.loginPath`.
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `apiEndpoint` | Federated (or override) API base URL. Defaults to own `subjectuniqueidentifier_url`. MITM-checked via JWT `rodit_subjectuniqueidentifier_url` when it differs from client home. |
+| `loginPath` | HTTP path (default `/api/login`) |
+| `timestamp` | Unix seconds; if omitted, fetched from peer `GET /api/login/timestamp` |
+| `accountId` | NEAR account when signing without `own_rodit.token_id` |
+| `timestampPath` | Timestamp path (default `/api/login/timestamp`) |
 
 ```javascript
-const result = await roditClient.login_server({
-  loginPath: '/api/login'  // optional; default shown
-})
+// Same-API (home)
+const home = await roditClient.login_server();
+
+// Federated login into a sibling API in the same family
+const fed = await roditClient.login_server({
+  apiEndpoint: 'https://api-b.example.com',
+  loginPath: '/api/login', // optional
+});
 ```
 
-**Returns:** `Promise<Object>` - Authentication result with `jwt_token`
+**Returns:** `Promise<Object>` - Authentication result with `jwt_token`, or `{ error, errorCode, failureReason, requestId }` on failure (`FEDERATED_ISSUER_MISSING` / `FEDERATED_ISSUER_MISMATCH` for MITM failures).
 
 ##### logout_server()
 
@@ -2233,6 +2354,10 @@ const {
   logout_server,         // Server logout
   validate_jwt_token_be, // JWT validation
   generate_jwt_token,    // JWT generation
+  normalizeUrlWithoutPort,     // URL compare helper (strip port)
+  isNonEmptyUrlClaim,          // federated claim present & non-empty
+  isFederatedRoditLogin,       // peer vs own subject URL differs
+  validateFederatedLoginTarget, // client MITM check after JWT crypto
   validatepermissions,   // Permission middleware
   webhookHandler,        // Webhook handler
   versioningMiddleware,  // API versioning
@@ -2244,7 +2369,7 @@ const {
 } = require('@rodit/rodit-auth-be')
 // Note: Session storage configuration functions are available via:
 // const { setExpressSessionStore, configureStorageFromConfig,
-  // createExpressSessionMiddleware, InMemorySessionStorage }
+  // InMemorySessionStorage }
 // = require('@rodit/rodit-auth-be/lib/auth/sessionmanager');
 ```
 

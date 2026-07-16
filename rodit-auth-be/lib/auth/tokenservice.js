@@ -70,6 +70,85 @@ function extractLoginPeerRoditIdFromSub(sub) {
   return subParts.length > 1 ? subParts[1] : "";
 }
 
+function normalizeUrlWithoutPort(url) {
+  if (!url) return "";
+  try {
+    const parsedUrl = new URL(url);
+    parsedUrl.port = "";
+    return parsedUrl.toString();
+  } catch (_e) {
+    return String(url);
+  }
+}
+
+function isNonEmptyUrlClaim(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+/** True when login peer and issuing server declare different API URLs (federated login). */
+function isFederatedRoditLogin(peer_rodit, own_rodit) {
+  const peerUrl = peer_rodit?.metadata?.subjectuniqueidentifier_url;
+  const ownUrl = own_rodit?.metadata?.subjectuniqueidentifier_url;
+  if (!peerUrl || !ownUrl) return false;
+  return normalizeUrlWithoutPort(peerUrl) !== normalizeUrlWithoutPort(ownUrl);
+}
+
+/**
+ * Client MITM check after JWT crypto validation.
+ * Federated attempt = intendedApiEndpoint differs from client home URL.
+ *
+ * @param {Object} payload - Verified JWT payload
+ * @param {string} intendedApiEndpoint - URL the client connected to for login
+ * @param {string} clientHomeSubjectUrl - Client RODiT subjectuniqueidentifier_url
+ * @returns {{ ok: boolean, federated?: boolean, errorCode?: string, errorMessage?: string }}
+ */
+function validateFederatedLoginTarget(
+  payload,
+  intendedApiEndpoint,
+  clientHomeSubjectUrl
+) {
+  const normalizedIntended = normalizeUrlWithoutPort(intendedApiEndpoint);
+  const normalizedClientHome = normalizeUrlWithoutPort(clientHomeSubjectUrl);
+  const isFederatedAttempt = normalizedClientHome !== normalizedIntended;
+
+  if (!isFederatedAttempt) {
+    return { ok: true, federated: false };
+  }
+
+  const federatedIssuerUrl = payload?.rodit_subjectuniqueidentifier_url;
+  if (!isNonEmptyUrlClaim(federatedIssuerUrl)) {
+    return {
+      ok: false,
+      federated: true,
+      errorCode: "FEDERATED_ISSUER_MISSING",
+      errorMessage:
+        "Federated login JWT has null/empty rodit_subjectuniqueidentifier_url",
+    };
+  }
+
+  if (normalizeUrlWithoutPort(federatedIssuerUrl) !== normalizedIntended) {
+    return {
+      ok: false,
+      federated: true,
+      errorCode: "FEDERATED_ISSUER_MISMATCH",
+      errorMessage:
+        "rodit_subjectuniqueidentifier_url does not match login apiEndpoint",
+    };
+  }
+
+  if (normalizeUrlWithoutPort(payload?.iss) !== normalizedClientHome) {
+    return {
+      ok: false,
+      federated: true,
+      errorCode: "FEDERATED_ISSUER_MISMATCH",
+      errorMessage:
+        "JWT iss does not match client home subjectuniqueidentifier_url",
+    };
+  }
+
+  return { ok: true, federated: true };
+}
+
 function parseRoditJwtDurationSeconds(metadata) {
   const parsed = parseInt(metadata?.jwt_duration, 10);
   if (Number.isFinite(parsed) && parsed > 0) {
@@ -750,6 +829,7 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
       
       const jwtSignStart = Date.now();
       const { SignJWT } = await getJose();
+      const federatedLogin = isFederatedRoditLogin(peer_rodit, own_rodit);
       const token = await new SignJWT({
         iss: peer_rodit.metadata.subjectuniqueidentifier_url,
         sub:
@@ -776,6 +856,10 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
         rodit_allowedcidr: peer_rodit.metadata.allowed_cidr,
         rodit_allowediso3166list: peer_rodit.metadata.allowed_iso3166list,
         rodit_webhookurl: peer_rodit.metadata.webhook_url,
+        // Always present (null when same-API); EdDSA covers the claim like any other
+        rodit_subjectuniqueidentifier_url: federatedLogin
+          ? own_rodit.metadata.subjectuniqueidentifier_url
+          : null,
         config_iso639: null,
         config_iso3166: null,
         config_iso15924: null,
@@ -802,6 +886,7 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
         jwtId,
         sessionId: session_id,
         sessionStatus: session_status,
+        federatedLogin,
         tokenValidFor: tokenExpiration - now,
         sessionValidFor: sessionExpiration - now
       });
@@ -1060,6 +1145,11 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
         rodit_webhookcidr: token.rodit_webhookcidr,
         rodit_allowedcidr: token.rodit_allowedcidr,
         rodit_webhookurl: token.rodit_webhookurl,
+        rodit_subjectuniqueidentifier_url: isNonEmptyUrlClaim(
+          token.rodit_subjectuniqueidentifier_url
+        )
+          ? token.rodit_subjectuniqueidentifier_url
+          : null,
         config_iso639: null,
         config_iso3166: null,
         config_iso15924: null,
@@ -1555,46 +1645,71 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
         throw new Error("Error 006: Token is not yet valid");
       }
   
-      // Function to normalize URL by removing port
-      const normalizeUrlWithoutPort = (url) => {
-        if (!url) return '';
-        try {
-          // Use URL constructor to parse the URL
-          const parsedUrl = new URL(url);
-          // Remove the port
-          parsedUrl.port = '';
-          // Return the normalized URL as a string
-          return parsedUrl.toString();
-        } catch (e) {
-          // If URL parsing fails, return the original URL
-          return url;
-        }
-      };
-      
-      // Normalize both URLs for comparison
-      const normalizedTokenIssuer = normalizeUrlWithoutPort(payload.iss);
-      const normalizedExpectedIssuer = normalizeUrlWithoutPort(rodit.metadata.subjectuniqueidentifier_url);
-      
       // Issuer check with enhanced logging
+      const federatedIssuerUrl = payload.rodit_subjectuniqueidentifier_url;
+      const isFederatedJwt = isNonEmptyUrlClaim(federatedIssuerUrl);
+      const normalizedTokenIssuer = normalizeUrlWithoutPort(payload.iss);
+      const normalizedOwnSubjectUrl = normalizeUrlWithoutPort(
+        rodit.metadata.subjectuniqueidentifier_url
+      );
+
       logger.debug("Detailed issuer validation information", {
         component: "JwtAuth",
         method: "validate_jwt_token_be",
         requestId,
         tokenIssuer: payload.iss,
         expectedIssuer: rodit.metadata.subjectuniqueidentifier_url,
+        federatedIssuerUrl,
         normalizedTokenIssuer,
-        normalizedExpectedIssuer,
+        normalizedOwnSubjectUrl,
         roditId: rodit.token_id,
         roditOwnerId: rodit.owner_id,
         hasMetadata: !!rodit.metadata,
         metadataKeys: rodit.metadata ? Object.keys(rodit.metadata) : [],
         payloadKeys: Object.keys(payload),
-        rawIssuerMatch: payload.iss === rodit.metadata.subjectuniqueidentifier_url,
-        normalizedIssuerMatch: normalizedTokenIssuer === normalizedExpectedIssuer
+        isFederatedJwt,
       });
-      
-      // Compare normalized URLs instead of raw URLs
-      if (normalizedTokenIssuer !== normalizedExpectedIssuer) {
+
+      if (isFederatedJwt) {
+        // 1) signed federated API URL must be THIS server
+        if (
+          normalizeUrlWithoutPort(federatedIssuerUrl) !== normalizedOwnSubjectUrl
+        ) {
+          logger.warn("Token validation failed - Invalid federated issuer URL", {
+            component: "JwtAuth",
+            method: "validate_jwt_token_be",
+            requestId,
+            federatedIssuerUrl,
+            expectedFederatedIssuer: rodit.metadata.subjectuniqueidentifier_url,
+          });
+          throw new Error("Error 005: Invalid federated issuer");
+        }
+
+        // 2) iss must be the login client's home API (from on-chain RODiT via sub)
+        const loginClientRoditId = extractLoginPeerRoditIdFromSub(payload.sub);
+        const loginClientRodit = loginClientRoditId
+          ? await nearorg_rpc_tokenfromroditid(loginClientRoditId)
+          : null;
+        const expectedClientIssuer =
+          loginClientRodit?.metadata?.subjectuniqueidentifier_url;
+
+        if (
+          !expectedClientIssuer ||
+          normalizedTokenIssuer !==
+            normalizeUrlWithoutPort(expectedClientIssuer)
+        ) {
+          logger.warn("Token validation failed - Invalid issuer for federated JWT", {
+            component: "JwtAuth",
+            method: "validate_jwt_token_be",
+            requestId,
+            tokenIssuer: payload.iss,
+            expectedClientIssuer,
+            loginClientRoditId,
+          });
+          throw new Error("Error 005: Invalid issuer");
+        }
+      } else if (normalizedTokenIssuer !== normalizedOwnSubjectUrl) {
+        // same-API / 9.12 tokens: iss must equal receiving server URL
         logger.warn("Token validation failed - Invalid issuer", {
           component: "JwtAuth",
           method: "validate_jwt_token_be",
@@ -1602,15 +1717,16 @@ function resolveCredentialExpirationUnix(now, sessionExpiration, own_rodit) {
           tokenIssuer: payload.iss,
           expectedIssuer: rodit.metadata.subjectuniqueidentifier_url,
           normalizedTokenIssuer,
-          normalizedExpectedIssuer,
+          normalizedOwnSubjectUrl,
           roditId: rodit.token_id,
-          // Check for common URL variations that might cause mismatch
-          issuerHasTrailingSlash: payload.iss?.endsWith('/'),
-          expectedHasTrailingSlash: rodit.metadata.subjectuniqueidentifier_url?.endsWith('/'),
-          issuerHasProtocol: payload.iss?.startsWith('http'),
-          expectedHasProtocol: rodit.metadata.subjectuniqueidentifier_url?.startsWith('http')
+          issuerHasTrailingSlash: payload.iss?.endsWith("/"),
+          expectedHasTrailingSlash:
+            rodit.metadata.subjectuniqueidentifier_url?.endsWith("/"),
+          issuerHasProtocol: payload.iss?.startsWith("http"),
+          expectedHasProtocol:
+            rodit.metadata.subjectuniqueidentifier_url?.startsWith("http"),
         });
-        
+
         throw new Error("Error 005: Invalid issuer");
       }
       
@@ -2590,4 +2706,8 @@ module.exports = {
   parseRoditJwtDurationSeconds,
   resolveSessionExpirationUnix,
   resolveCredentialExpirationUnix,
+  normalizeUrlWithoutPort,
+  isNonEmptyUrlClaim,
+  isFederatedRoditLogin,
+  validateFederatedLoginTarget,
 };

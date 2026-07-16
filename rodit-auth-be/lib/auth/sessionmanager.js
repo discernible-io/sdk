@@ -338,29 +338,6 @@ function configureStorageFromConfig() {
   }
 }
 
-// Optional helper to create a real express-session middleware using the current store
-function createExpressSessionMiddleware(options = {}) {
-  if (!sessionLib) {
-    logger.warnWithContext('express-session not installed; returning no-op session middleware', {
-      component: 'SessionManager',
-      operation: 'session.middleware.create'
-    });
-    return (req, res, next) => next();
-  }
-  const secret = config.get('SECURITY_OPTIONS.SESSION_SECRET');
-  const store = (currentStorage instanceof ExpressSessionStoreAdapter)
-    ? currentStorage.store
-    : new sessionLib.MemoryStore();
-
-  return sessionLib({
-    saveUninitialized: false,
-    resave: false,
-    ...options,
-    secret,
-    store,
-  });
-}
-
 class SessionManager {
   constructor() {
     const instanceId = ulid();
@@ -1411,7 +1388,6 @@ module.exports = {
   setStorage,
   setExpressSessionStore,
   configureStorageFromConfig,
-  createExpressSessionMiddleware,
   SESSION_CLEANUP_INTERVAL,
   SESSION_TOKEN_RETENTION_PERIOD
 };
