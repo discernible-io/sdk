@@ -2,7 +2,7 @@
 
 A comprehensive Node.js SDK for implementing RODiT-based mutual authentication, authorization, self-configuration, and session management in Express.js applications.
 
-**Version:** 9.13.0  
+**Version:** 9.14.1  
 **License:** Proprietary  
 **Author:** Discernible IO
 

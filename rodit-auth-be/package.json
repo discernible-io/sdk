@@ -1,5 +1,6 @@
 {
   "name": "@rodit/rodit-auth-be",
+  "version": "9.14.1",
   "description": "RODiT-based authentication system for Express.js applications",
   "main": "index.js",
   "exports": {
