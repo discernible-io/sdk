@@ -41,6 +41,7 @@ const { versioningMiddleware } = require('./lib/middleware/versioningmw');
 const { VersionManager } = require('./services/versionmanager');
 const loggingmw = require('./lib/middleware/loggingmw');
 const ratelimitmw = require('./lib/middleware/ratelimitmw');
+const enforceRateLimitFromClaims = require('./lib/middleware/enforceratelimitmw');
 const utils = require('./services/utils');
 const config = require('./services/configsdk');
 const performanceService = require('./services/performanceservice');
@@ -402,6 +403,14 @@ class RoditClient {
    */
   getRateLimitMiddleware() {
     return ratelimitmw;
+  }
+
+  /**
+   * Get middleware that enforces `req.rateLimit` from validatepermissions.
+   * @returns {Function} Middleware factory: enforceRateLimitFromClaims(options?)
+   */
+  getClaimRateLimitMiddleware() {
+    return enforceRateLimitFromClaims;
   }
 
   /**
@@ -1950,6 +1959,7 @@ module.exports = {
   versioningMiddleware,
   loggingmw,
   ratelimitmw,
+  enforceRateLimitFromClaims,
   versionManager,
   VersionManager,
   // Blockchain service functions

@@ -416,7 +416,7 @@ async function validatepermissions(req, res, next) {
     req.commentsRate = result.commentsRate;
   }
   
-  // Make rate limit information available for future implementation
+  // Make rate limit information available for enforceRateLimitFromClaims()
   req.rateLimit = {
     value: result.rateLimit,
     unlimited: result.unlimited === true,

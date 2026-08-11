@@ -2,6 +2,29 @@
 
 All notable changes to `@rodit/rodit-auth-be` are documented here.
 
+## [9.15.0] — 2026-08-10
+
+### Added
+
+- **Outbound webhook SSRF controls** in `send_webhook` (CC-0001 residual):
+  before `fetch`, reject userinfo and private / loopback / link-local / ULA /
+  CGNAT / cloud-metadata hostnames and resolved A/AAAA addresses (same policy
+  as SLC `url-join-identity.js`); enforce JWT/peer `rodit_webhookcidr` when
+  present; resolve-once and pin the IP for the request via undici `lookup`.
+  `SECURITY_OPTIONS.WEBHOOK_TLS_SKIP_VERIFY` is unchanged for **public**
+  self-signed destinations.
+- **`req.authenticatedRoditId` + login JSON `roditid`** after successful
+  `login_client` / `login_client_withnep413` signature verification (server-
+  derived peer token id only).
+- **`enforceRateLimitFromClaims()`** middleware (and
+  `RoditClient#getClaimRateLimitMiddleware`) that consumes `req.rateLimit`
+  set by `validatepermissions`.
+
+### Security
+
+- Compromised or DNS-rebound JWT `rodit_webhookurl` values can no longer reach
+  internal targets through the SDK outbound webhook path.
+
 ## [9.14.1] — 2026-08-07
 
 ### Changed

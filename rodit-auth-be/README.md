@@ -1196,6 +1196,10 @@ if (metadata.max_requests && metadata.maxrq_window) {
   const rateLimiter = roditClient.getRateLimitMiddleware()
   app.use(rateLimiter(maxRequests, windowSeconds))
 }
+
+// Per-route claim enforcement (after validatepermissions sets req.rateLimit):
+const enforceRateLimitFromClaims = roditClient.getClaimRateLimitMiddleware()
+app.use('/api', authenticate_apicall, validatepermissions, enforceRateLimitFromClaims())
 ```
 
 ### Environment Variables
@@ -2085,7 +2089,8 @@ app.post('/api/login', (req, res) => roditClient.login_client(req, res))
 ```javascript
 {
   jwt_token: '<jwt-token>',
-  requestId: '01HQXYZ...'
+  requestId: '01HQXYZ...',
+  roditid: '<verified-peer-token-id>'  // also set on req.authenticatedRoditId
 }
 ```
 
@@ -2275,6 +2280,18 @@ app.use(limiter)
 
 **Returns:** Express middleware function
 
+##### getClaimRateLimitMiddleware()
+
+Get the middleware factory that enforces per-route limits from
+`req.rateLimit` (populated by `validatepermissions`).
+
+```javascript
+const enforceRateLimitFromClaims = roditClient.getClaimRateLimitMiddleware()
+app.use('/api', authenticate_apicall, validatepermissions, enforceRateLimitFromClaims())
+```
+
+**Returns:** Middleware factory `(options?) => Express middleware`
+
 ##### getPerformanceService()
 
 Get the performance tracking service.
@@ -2311,6 +2328,11 @@ const webhookHandler = roditClient.getWebhookHandler()
 ##### send_webhook(payload, req)
 
 Send a webhook notification.
+
+Outbound delivery rejects private / loopback / metadata destinations (and
+resolved addresses), enforces peer JWT `rodit_webhookcidr` when set, and pins
+DNS for the request. `SECURITY_OPTIONS.WEBHOOK_TLS_SKIP_VERIFY` still applies
+to **public** self-signed endpoints.
 
 ```javascript
 const result = await roditClient.send_webhook({
@@ -2363,6 +2385,7 @@ const {
   versioningMiddleware,  // API versioning
   loggingmw,             // Logging middleware
   ratelimitmw,           // Rate limiting middleware
+  enforceRateLimitFromClaims, // Consumes req.rateLimit from validatepermissions
   versionManager,        // Version manager
   VersionManager,        // Version manager class
   nearorg_rpc_timestamp  // Blockchain RPC timestamp function

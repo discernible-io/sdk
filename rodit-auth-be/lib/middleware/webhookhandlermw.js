@@ -8,6 +8,8 @@
 
 const crypto = require("crypto");
 const https = require("https");
+const dns = require("dns").promises;
+const net = require("net");
 const { Agent } = require("undici");
 const config = require('../../services/configsdk');
 const { isStrictEnvironment, getNodeEnv } = require('../../services/env');
@@ -19,6 +21,304 @@ const nacl = require("tweetnacl");
 const stateManager = require("../blockchain/statemanager");
 const { sessionManager } = require("../auth/sessionmanager");
 const { authenticate_webhook } = require("../auth/authentication");
+
+// ---------------------------------------------------------------------------
+// Outbound webhook URL SSRF / CIDR / DNS-pin helpers
+// Policy aligned with SLC `src/game/url-join-identity.js`.
+// ---------------------------------------------------------------------------
+
+function webhookUrlError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+/**
+ * Reject loopback / RFC1918 / link-local / ULA / CGNAT / cloud-metadata destinations.
+ * Self-signed TLS for public webhook hosts remains allowed (WEBHOOK_TLS_SKIP_VERIFY).
+ */
+function isBlockedIpAddress(ip) {
+  const version = net.isIP(ip);
+  if (version === 4) {
+    const parts = ip.split(".").map((p) => Number(p));
+    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+      return true;
+    }
+    const [a, b] = parts;
+    if (a === 0) return true; // 0.0.0.0/8
+    if (a === 10) return true; // 10.0.0.0/8
+    if (a === 127) return true; // 127.0.0.0/8
+    if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local / metadata
+    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+    if (a === 192 && b === 168) return true; // 192.168.0.0/16
+    if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT
+    if (a >= 224) return true; // multicast / reserved
+    return false;
+  }
+  if (version === 6) {
+    const normalized = ip.toLowerCase();
+    if (normalized === "::" || normalized === "::1") return true;
+    const mapped = normalized.match(/:ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+    if (mapped) return isBlockedIpAddress(mapped[1]);
+    const first = normalized.split(":")[0] || "";
+    const firstVal = Number.parseInt(first, 16);
+    if (Number.isFinite(firstVal)) {
+      if ((firstVal & 0xffc0) === 0xfe80) return true; // fe80::/10
+      if ((firstVal & 0xfe00) === 0xfc00) return true; // fc00::/7
+      if ((firstVal & 0xff00) === 0xff00) return true; // ff00::/8
+    }
+    return false;
+  }
+  return true;
+}
+
+function isBlockedHostname(hostname) {
+  const host = String(hostname || "")
+    .toLowerCase()
+    .replace(/\.$/, "")
+    .replace(/^\[|\]$/g, "");
+  if (!host) return true;
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "metadata.google.internal" || host.endsWith(".metadata.google.internal")) {
+    return true;
+  }
+  if (host === "metadata" || host.endsWith(".internal")) return true;
+  if (net.isIP(host)) return isBlockedIpAddress(host);
+  return false;
+}
+
+/**
+ * Synchronous URL policy checks (scheme, length, userinfo, blocked hostname literals).
+ * @param {string} raw Absolute http(s) URL
+ * @returns {URL}
+ */
+function validateOutboundWebhookUrl(raw) {
+  if (typeof raw !== "string" || !raw.trim()) {
+    throw webhookUrlError("WEBHOOK_URL_INVALID", "Webhook URL is required");
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length > 2048) {
+    throw webhookUrlError("WEBHOOK_URL_INVALID", "Webhook URL is too long");
+  }
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw webhookUrlError("WEBHOOK_URL_INVALID", "Webhook URL must be an absolute URL");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw webhookUrlError("WEBHOOK_URL_INVALID", "Webhook URL must use http or https");
+  }
+  if (parsed.username || parsed.password) {
+    throw webhookUrlError("WEBHOOK_URL_INVALID", "Webhook URL must not contain userinfo");
+  }
+  if (isBlockedHostname(parsed.hostname)) {
+    throw webhookUrlError(
+      "WEBHOOK_URL_BLOCKED",
+      "Webhook URL must not target a private, loopback, or metadata host"
+    );
+  }
+  return parsed;
+}
+
+function ipv4ToInt(ip) {
+  return ip.split(".").reduce((acc, oct) => ((acc << 8) + Number(oct)) >>> 0, 0) >>> 0;
+}
+
+function parseCidrList(cidrClaim) {
+  if (cidrClaim == null) return [];
+  const raw = String(cidrClaim).trim();
+  if (!raw) return [];
+  return raw
+    .split(/[\s,;]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function isUnrestrictedCidr(cidr) {
+  const value = String(cidr || "").trim().toLowerCase();
+  return value === "0.0.0.0/0" || value === "::/0" || value === "*";
+}
+
+function isIpInCidr(ip, cidr) {
+  const trimmed = String(cidr || "").trim();
+  if (!trimmed || isUnrestrictedCidr(trimmed)) return true;
+
+  const slash = trimmed.indexOf("/");
+  if (slash < 0) return false;
+  const base = trimmed.slice(0, slash);
+  const prefix = Number(trimmed.slice(slash + 1));
+  const ipVer = net.isIP(ip);
+  const baseVer = net.isIP(base);
+  if (!ipVer || !baseVer || ipVer !== baseVer || !Number.isInteger(prefix)) {
+    return false;
+  }
+
+  if (ipVer === 4) {
+    if (prefix < 0 || prefix > 32) return false;
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    return (ipv4ToInt(ip) & mask) === (ipv4ToInt(base) & mask);
+  }
+
+  // IPv6: compare prefix bits of normalized 128-bit forms
+  if (prefix < 0 || prefix > 128) return false;
+  const toBytes = (addr) => {
+    const buf = Buffer.alloc(16);
+    const full = expandIpv6(addr);
+    for (let i = 0; i < 8; i++) {
+      const hextet = Number.parseInt(full[i], 16);
+      buf.writeUInt16BE(hextet, i * 2);
+    }
+    return buf;
+  };
+
+  try {
+    const ipBuf = toBytes(ip);
+    const baseBuf = toBytes(base);
+    const fullBytes = Math.floor(prefix / 8);
+    const remBits = prefix % 8;
+    for (let i = 0; i < fullBytes; i++) {
+      if (ipBuf[i] !== baseBuf[i]) return false;
+    }
+    if (remBits === 0) return true;
+    const mask = 0xff << (8 - remBits);
+    return (ipBuf[fullBytes] & mask) === (baseBuf[fullBytes] & mask);
+  } catch {
+    return false;
+  }
+}
+
+function expandIpv6(addr) {
+  const lower = String(addr).toLowerCase().replace(/^\[|\]$/g, "");
+  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) {
+    const parts = mapped[1].split(".").map(Number);
+    const hi = ((parts[0] << 8) | parts[1]).toString(16);
+    const lo = ((parts[2] << 8) | parts[3]).toString(16);
+    return ["0", "0", "0", "0", "0", "ffff", hi, lo];
+  }
+  const [head, tail] = lower.split("::");
+  const headParts = head ? head.split(":") : [];
+  const tailParts = tail ? tail.split(":") : [];
+  const missing = 8 - (headParts.length + tailParts.length);
+  if (missing < 0) {
+    throw new Error("invalid ipv6");
+  }
+  const middle = Array(missing).fill("0");
+  const parts = [...headParts, ...middle, ...tailParts].map((p) => p || "0");
+  if (parts.length !== 8) {
+    throw new Error("invalid ipv6");
+  }
+  return parts;
+}
+
+function assertIpAllowedByWebhookCidr(ip, cidrClaim) {
+  const cidrs = parseCidrList(cidrClaim);
+  if (cidrs.length === 0 || cidrs.every(isUnrestrictedCidr)) {
+    return;
+  }
+  const allowed = cidrs.some((cidr) => isIpInCidr(ip, cidr));
+  if (!allowed) {
+    throw webhookUrlError(
+      "WEBHOOK_CIDR_DENIED",
+      "Resolved webhook address is outside the peer webhook_cidr allowlist"
+    );
+  }
+}
+
+/**
+ * Resolve hostname once, reject blocked addresses, enforce webhook_cidr, and
+ * return a single pinned address for the request lifetime (DNS rebinding defense).
+ *
+ * @param {string|URL} url
+ * @param {string} [webhookCidr] JWT/peer `rodit_webhookcidr` / `webhook_cidr`
+ * @returns {Promise<{ url: URL, hostname: string, address: string, family: number }>}
+ */
+async function resolveAndPinWebhookDestination(url, webhookCidr) {
+  const parsed = url instanceof URL ? url : validateOutboundWebhookUrl(url);
+  const hostname = String(parsed.hostname || "").replace(/^\[|\]$/g, "");
+
+  if (net.isIP(hostname)) {
+    if (isBlockedIpAddress(hostname)) {
+      throw webhookUrlError(
+        "WEBHOOK_URL_BLOCKED",
+        "Webhook URL must not target a private, loopback, or metadata host"
+      );
+    }
+    assertIpAllowedByWebhookCidr(hostname, webhookCidr);
+    return {
+      url: parsed,
+      hostname,
+      address: hostname,
+      family: net.isIP(hostname),
+    };
+  }
+
+  let records;
+  try {
+    records = await dns.lookup(hostname, { all: true, verbatim: true });
+  } catch {
+    throw webhookUrlError(
+      "WEBHOOK_URL_UNRESOLVABLE",
+      "Webhook URL hostname could not be resolved"
+    );
+  }
+  if (!records.length) {
+    throw webhookUrlError(
+      "WEBHOOK_URL_UNRESOLVABLE",
+      "Webhook URL hostname could not be resolved"
+    );
+  }
+
+  const candidates = records.filter((record) => !isBlockedIpAddress(record.address));
+  if (!candidates.length) {
+    throw webhookUrlError(
+      "WEBHOOK_URL_BLOCKED",
+      "Webhook URL must not resolve to a private, loopback, or metadata address"
+    );
+  }
+
+  const cidrs = parseCidrList(webhookCidr);
+  const restrictCidr = cidrs.length > 0 && !cidrs.every(isUnrestrictedCidr);
+  const allowed = restrictCidr
+    ? candidates.filter((record) => cidrs.some((cidr) => isIpInCidr(record.address, cidr)))
+    : candidates;
+
+  if (!allowed.length) {
+    throw webhookUrlError(
+      "WEBHOOK_CIDR_DENIED",
+      "Resolved webhook address is outside the peer webhook_cidr allowlist"
+    );
+  }
+
+  // Prefer IPv4 when available for broader destination compatibility.
+  const pinned = allowed.find((r) => r.family === 4) || allowed[0];
+  return {
+    url: parsed,
+    hostname,
+    address: pinned.address,
+    family: pinned.family,
+  };
+}
+
+/**
+ * undici Agent that always returns the pinned address for DNS lookups
+ * (keeps Host / SNI as the original hostname).
+ */
+function createPinnedDispatcher({ address, family, skipTlsVerify = false }) {
+  return new Agent({
+    connect: {
+      rejectUnauthorized: !skipTlsVerify,
+      lookup: (hostname, options, callback) => {
+        if (options && options.all) {
+          callback(null, [{ address, family }]);
+          return;
+        }
+        callback(null, address, family);
+      },
+    },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Webhook identity + session helpers
@@ -915,12 +1215,52 @@ async function resolveOutboundWebhookSessionId(options = {}, req = null) {
         .replace(/\/+$/, "");
       const normalizedEndpoint = `/${String(endpoint || "/webhook").replace(/^\/+/, "")}`;
       const formattedWebhookUrl = `https://${cleanWebhookUrl}${normalizedEndpoint}`;
+
+      // Outbound SSRF controls: reject userinfo / private / metadata destinations,
+      // enforce peer webhook_cidr, and pin DNS for the request lifetime.
+      // WEBHOOK_TLS_SKIP_VERIFY remains allowed for public self-signed hosts.
+      let pinnedDestination;
+      try {
+        validateOutboundWebhookUrl(formattedWebhookUrl);
+        pinnedDestination = await resolveAndPinWebhookDestination(
+          formattedWebhookUrl,
+          req.user.rodit_webhookcidr
+        );
+      } catch (ssrfError) {
+        const duration = Date.now() - startTime;
+        const errorCode = ssrfError.code || "WEBHOOK_URL_BLOCKED";
+        logger.warnWithContext("Outbound webhook URL rejected by SSRF controls", {
+          ...baseContext,
+          duration,
+          formattedWebhookUrl,
+          webhookCidr: req.user.rodit_webhookcidr || null,
+          errorCode,
+          error: ssrfError.message
+        });
+        logger.metric &&
+          logger.metric("webhook_delivery_failures_total", 1, {
+            component: "WebhookHandler",
+            reason: errorCode,
+            event,
+          });
+        return {
+          isValid: false,
+          error: {
+            code: errorCode,
+            message: ssrfError.message,
+            requestId,
+          },
+        };
+      }
    
        logger.debugWithContext("Webhook URL details", {
          ...baseContext,
          rawWebhookUrl: webhookUrl,
          endpoint,
-         formattedWebhookUrl
+         formattedWebhookUrl,
+         pinnedAddress: pinnedDestination.address,
+         pinnedFamily: pinnedDestination.family,
+         webhookCidr: req.user.rodit_webhookcidr || null
        });
    
        const timestamp = Date.now();
@@ -1186,7 +1526,8 @@ async function resolveOutboundWebhookSessionId(options = {}, req = null) {
        // Configure HTTPS agent to skip TLS verification if configured
       // This is necessary when webhook destinations use self-signed certificates
       // Since mutual authentication via digital signatures is already in place,
-      // skipping TLS verification is safe in this context
+      // skipping TLS verification is safe in this context (public destinations only;
+      // private/metadata hosts are rejected above).
       const skipTlsVerify = config.has('SECURITY_OPTIONS.WEBHOOK_TLS_SKIP_VERIFY') 
         ? String(config.get('SECURITY_OPTIONS.WEBHOOK_TLS_SKIP_VERIFY')).toLowerCase() === 'true'
         : false;
@@ -1196,27 +1537,37 @@ async function resolveOutboundWebhookSessionId(options = {}, req = null) {
         headers: headers,
         body: payload,
       };
-      
+
+      // Always pin DNS via undici lookup so a rebinding race cannot retarget
+      // the TCP connection after the SSRF checks above.
+      const undiciAgent = createPinnedDispatcher({
+        address: pinnedDestination.address,
+        family: pinnedDestination.family,
+        skipTlsVerify,
+      });
+      fetchOptions.dispatcher = undiciAgent;
+
       if (skipTlsVerify) {
-        // Create custom undici Agent that accepts self-signed certificates
-        // Node.js fetch uses undici under the hood and requires 'dispatcher' option
-        const undiciAgent = new Agent({
-          connect: {
-            rejectUnauthorized: false
-          }
-        });
-        fetchOptions.dispatcher = undiciAgent;
-        
         logger.debugWithContext("Webhook TLS verification disabled", {
           ...baseContext,
           skipTlsVerify: true,
-          reason: "SECURITY_OPTIONS.WEBHOOK_TLS_SKIP_VERIFY=true"
+          reason: "SECURITY_OPTIONS.WEBHOOK_TLS_SKIP_VERIFY=true",
+          pinnedAddress: pinnedDestination.address
         });
       }
       
       // Send webhook request
       const fetchStartTime = Date.now();
-      const response = await fetch(formattedWebhookUrl, fetchOptions);
+      let response;
+      try {
+        response = await fetch(formattedWebhookUrl, fetchOptions);
+      } finally {
+        try {
+          await undiciAgent.close();
+        } catch (_closeError) {
+          // ignore dispatcher close errors
+        }
+      }
       const fetchDuration = Date.now() - fetchStartTime;
    
        // Log fetch duration metrics
@@ -1747,6 +2098,11 @@ module.exports = {
   isImplicitAccount,
   implicitAccountToBase64urlKey,
   base64urlKeyToImplicitAccount,
+
+  // Outbound SSRF / CIDR / DNS-pin helpers
+  validateOutboundWebhookUrl,
+  resolveAndPinWebhookDestination,
+  createPinnedDispatcher,
 
   // Added exports from eventhandler.js
   WebhookEventHandler,

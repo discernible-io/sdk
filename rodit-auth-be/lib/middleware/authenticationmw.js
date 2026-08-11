@@ -586,9 +586,14 @@ async function login_client(req, res) {
     // Set the jwt_token in the response header
     res.setHeader('New-Token', jwt_token);
 
+    // Server-derived peer identity (verified RODiT only — do not trust client body).
+    const authenticatedRoditId = peer_rodit.token_id;
+    req.authenticatedRoditId = authenticatedRoditId;
+
     return res.json({
       jwt_token,
-      requestId
+      requestId,
+      roditid: authenticatedRoditId
     });
   } catch (error) {
     const duration = Date.now() - startTime;
@@ -1453,13 +1458,19 @@ async function login_client(req, res) {
         requestId,
         response: {
           requestId: requestId,
-          jwt_token_length: jwt_token ? jwt_token.length : 0
+          jwt_token_length: jwt_token ? jwt_token.length : 0,
+          roditid: peer_rodit.token_id
         }
       });
+
+      // Server-derived peer identity (verified RODiT only — do not trust client body).
+      const authenticatedRoditId = peer_rodit.token_id;
+      req.authenticatedRoditId = authenticatedRoditId;
 
       return res.json({
         jwt_token,
         requestId,
+        roditid: authenticatedRoditId,
       });
     } catch (error) {
       const duration = Date.now() - startTime;
