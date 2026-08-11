@@ -2,11 +2,13 @@
 
 A comprehensive Node.js SDK for implementing RODiT-based mutual authentication, authorization, self-configuration, and session management in Express.js applications.
 
-**Version:** 9.14.1  
+**Version:** 9.15.0  
 **License:** Proprietary  
 **Author:** Discernible IO
 
 **Login `POST` /api/login:** Use **`accountid`** (or **`roditid`**), **`timestamp`**, and **`base64url_signature`**. Sign UTF-8 bytes of `identifier + timestamp_iso`, and reject deprecated keys such as **`signature`** and **`account_id`**. See [CHANGELOG.md](./CHANGELOG.md).
+
+**9.15.0:** Outbound `send_webhook` SSRF controls (private/metadata blocklist, `webhook_cidr` enforcement, DNS pin); login success exposes verified peer id as JSON `roditid` and `req.authenticatedRoditId`; optional `enforceRateLimitFromClaims()` for per-route claim quotas. See [CHANGELOG.md](./CHANGELOG.md).
 
 **9.13 federated login:** A client RODiT issued for API A can log into API B in the same SR/CR family via `login_server({ apiEndpoint })`. See [Federated login](#federated-login-same-family-different-api-url).
 
@@ -23,6 +25,7 @@ A comprehensive Node.js SDK for implementing RODiT-based mutual authentication, 
   - [Session lifetime and TTL](#session-lifetime-and-ttl)
 - [Configuration](#configuration)
   - [Environment Variables](#environment-variables)
+  - [Dynamic Rate Limiting](#dynamic-rate-limiting)
   - [Session Storage Configuration](#session-storage-configuration)
   - [Configuration Priority](#configuration-priority)
 - [Logging & Monitoring](#logging--monitoring)
@@ -605,26 +608,33 @@ Permissions are configured in your RODiT token metadata using the `permissioned_
 ```
 
 **Permission Format:**
-- `"+0"` = All methods allowed (GET, POST, PUT, DELETE, etc.)
-- `"+1"` = GET only
-- `"+2"` = POST only
-- Custom combinations can be defined
+
+Values are strings: optional scope prefix (`+` / `-`) plus a numeric rate:
+
+| Value | Meaning |
+|-------|---------|
+| `"+0"` | Allowed (entity + properties scope); **unlimited** rate |
+| `"+60"` | Allowed; **60 requests** per window (default window 60s) |
+| `"-0"` | Allowed (properties-only scope); unlimited |
+| (absent / no match) | Denied (`403`) |
+
+`validatepermissions` / `authorize` checks allow/deny and sets `req.rateLimit` from the numeric part. That metadata is inert until you mount `enforceRateLimitFromClaims()` (see [Dynamic Rate Limiting](#dynamic-rate-limiting)).
 
 ### Permission Validation Middleware
 
 The `authorize` middleware validates that the authenticated user has permission to access the requested route:
 
 ```javascript
-const authenticate = (req, res, next) => {
-  req.app.locals.roditClient.authenticate(req, res, next)
-}
-const authorize = (req, res, next) => {
-  req.app.locals.roditClient.authorize(req, res, next)
-}
-// Apply both authentication and authorization
+// After RoditClient.create('server') and app.locals.roditClient = roditClient
+const authenticate = (req, res, next) => roditClient.authenticate(req, res, next)
+const authorize = (req, res, next) => roditClient.authorize(req, res, next)
+const enforceClaimLimits = roditClient.getClaimRateLimitMiddleware()
+
+// Auth + permission allow/deny
 app.use('/api/admin', authenticate, authorize, adminRoutes)
-// CRUDA endpoints with full protection
-app.use('/api/cruda', authenticate, authorize, crudaRoutes)
+
+// Auth + permissions + per-route claim quotas from permissioned_routes
+app.use('/api/cruda', authenticate, authorize, enforceClaimLimits(), crudaRoutes)
 ```
 
 ### Permission Enforcement
@@ -1186,20 +1196,33 @@ const dbPath = config.get('API_DEFAULT_OPTIONS.DB_PATH')
 
 ### Dynamic Rate Limiting
 
+Two complementary limiters:
+
+1. **Global** (`getRateLimitMiddleware` / `ratelimitmw`) — from own RODiT `max_requests` / `maxrq_window` (or fixed numbers). Applies across routes.
+2. **Per-route claim** (`getClaimRateLimitMiddleware` / `enforceRateLimitFromClaims`) — consumes `req.rateLimit` set by `validatepermissions` from each peer’s `permissioned_routes` value (e.g. `"+60"` → 60 req / 60s for that path). Returns `429 RATE_LIMIT_EXCEEDED` when exceeded. In-memory, per process.
+
 ```javascript
-// Configure rate limiting from RODiT token
+// 1) Global limiter from own RODiT metadata
 const configObject = await roditClient.getConfigOwnRodit()
 const metadata = configObject.own_rodit.metadata
 if (metadata.max_requests && metadata.maxrq_window) {
-  const maxRequests = parseInt(metadata.max_requests)
-  const windowSeconds = parseInt(metadata.maxrq_window)
+  const maxRequests = parseInt(metadata.max_requests, 10)
+  const windowSeconds = parseInt(metadata.maxrq_window, 10)
   const rateLimiter = roditClient.getRateLimitMiddleware()
-  app.use(rateLimiter(maxRequests, windowSeconds))
+  // Note: factory args are (maxRequests, windowMinutes)
+  app.use(rateLimiter(maxRequests, Math.ceil(windowSeconds / 60) || 1))
 }
 
-// Per-route claim enforcement (after validatepermissions sets req.rateLimit):
-const enforceRateLimitFromClaims = roditClient.getClaimRateLimitMiddleware()
-app.use('/api', authenticate_apicall, validatepermissions, enforceRateLimitFromClaims())
+// 2) Per-route claim enforcement (after authenticate + validatepermissions)
+const { authenticate_apicall, validatepermissions, enforceRateLimitFromClaims } =
+  require('@rodit/rodit-auth-be')
+// Or: roditClient.getClaimRateLimitMiddleware()
+app.use(
+  '/api',
+  (req, res, next) => roditClient.authenticate(req, res, next),
+  validatepermissions,
+  enforceRateLimitFromClaims()
+)
 ```
 
 ### Environment Variables
@@ -1253,8 +1276,8 @@ export LOKI_TLS_SKIP_VERIFY=false    # true to skip TLS verification
 
 #### Security Options
 ```bash
-// Webhook configuration
-export WEBHOOK_TLS_SKIP_VERIFY=false  # true to skip TLS verification
+// Webhook TLS (public destinations only; private/metadata URLs are always blocked)
+export SECURITY_OPTIONS_WEBHOOK_TLS_SKIP_VERIFY=false  # true for self-signed public webhook hosts
 // Login mode control (see Login Mode section below)
 export SECURITY_OPTIONS_LOGIN_MODE=partner  # partner, promiscuous, or p2p
 // Security thresholds
@@ -1491,25 +1514,39 @@ performanceService.recordMetric('user_action', 1, {
 })
 ```
 
- ## Webhooks
- 
- ### Overview
+## Webhooks
 
-The SDK supports sending webhooks to multiple endpoints for important events. Webhook URLs are configured in the RODiT token metadata.
+### Overview
+
+The SDK supports sending webhooks to multiple endpoints for important events. Webhook URLs come from the **peer JWT** claim `rodit_webhookurl` (from that peer’s RODiT `webhook_url` metadata).
 
 **Key Features:**
 - **Custom Endpoints** - Send webhooks to any endpoint path (e.g., `/hooks/wake`, `/hooks/agent`, `/webhook`)
-- **Non-blocking** - Webhooks sent asynchronously without blocking the main response
-- **Error Resilient** - Webhook failures don't affect the main operation
+- **Ed25519 signed** - Payload + timestamp signed; receivers verify via `X-Signature` / signer identity headers
+- **Outbound SSRF controls (9.15+)** - Before `fetch`, reject userinfo and private / loopback / link-local / ULA / CGNAT / cloud-metadata hostnames and resolved A/AAAA; enforce peer `rodit_webhookcidr` when set; resolve-once and pin DNS for the request
+- **Self-signed TLS (public only)** - `SECURITY_OPTIONS.WEBHOOK_TLS_SKIP_VERIFY=true` still allowed for **public** destinations
 
-Webhooks are configured in your RODiT token:
+Peer RODiT metadata:
 
 ```json
 {
-"webhook_url": "https:
-"webhook_cidr": "0.0.0.0/0"
+  "webhook_url": "hooks.example.com",
+  "webhook_cidr": "0.0.0.0/0"
 }
 ```
+
+- `webhook_url` — host (optional path); SDK POSTs `https://{webhook_url}{endpoint}`
+- `webhook_cidr` — allowlist for the **resolved** destination IP (`0.0.0.0/0` / empty = any public IP still subject to the SSRF blocklist)
+
+Outbound rejection codes (returned as `{ isValid: false, error: { code, message, requestId } }`):
+
+| Code | Meaning |
+|------|---------|
+| `WEBHOOK_URL_MISSING` | No `rodit_webhookurl` on `req.user` |
+| `WEBHOOK_URL_INVALID` | Bad URL / userinfo / scheme |
+| `WEBHOOK_URL_BLOCKED` | Private, loopback, or metadata target |
+| `WEBHOOK_URL_UNRESOLVABLE` | DNS lookup failed |
+| `WEBHOOK_CIDR_DENIED` | Resolved IP outside peer `webhook_cidr` |
 
 ### Sending Webhooks to Default Endpoint
 
@@ -2083,16 +2120,23 @@ Handle Express login requests from clients. Validates RODiT credentials and issu
 app.post('/api/login', (req, res) => roditClient.login_client(req, res))
 ```
 
-**Request Body:** `login_client` accepts `accountid`, `timestamp`, and `base64url_signature`.
+**Request Body:** `accountid` or `roditid` (exactly one non-empty), `timestamp` (and/or `timestamp_iso`), and `base64url_signature` (or `roditid_base64url_signature`).
+
+**On success:**
+- Sets `req.authenticatedRoditId` to the **verified** peer token id (`peer_rodit.token_id`) — do not use `req.body.roditid` for app hooks
+- JSON body includes the same value as `roditid` (in addition to `jwt_token` / `requestId`)
+- Creates a server session keyed by that peer id; issues JWT (`New-Token` header + body)
 
 **Response:**
 ```javascript
 {
   jwt_token: '<jwt-token>',
   requestId: '01HQXYZ...',
-  roditid: '<verified-peer-token-id>'  // also set on req.authenticatedRoditId
+  roditid: '<verified-peer-token-id>'
 }
 ```
+
+`login_client_withnep413` returns the same success shape (`jwt_token`, `requestId`, `roditid`) and also sets `req.authenticatedRoditId`.
 
 ##### logout_client(req, res)
 
@@ -2283,11 +2327,16 @@ app.use(limiter)
 ##### getClaimRateLimitMiddleware()
 
 Get the middleware factory that enforces per-route limits from
-`req.rateLimit` (populated by `validatepermissions`).
+`req.rateLimit` (populated by `validatepermissions` / `authorize`).
+
+Place **after** authentication and permission validation. Skips when
+`req.rateLimit` is missing or `unlimited: true`. Default window is
+`req.rateLimit.timeWindow` seconds (60). Optional `{ store }` Map-like
+override for multi-instance deployments.
 
 ```javascript
 const enforceRateLimitFromClaims = roditClient.getClaimRateLimitMiddleware()
-app.use('/api', authenticate_apicall, validatepermissions, enforceRateLimitFromClaims())
+app.use('/api', authenticate, authorize, enforceRateLimitFromClaims())
 ```
 
 **Returns:** Middleware factory `(options?) => Express middleware`
@@ -2327,12 +2376,12 @@ const webhookHandler = roditClient.getWebhookHandler()
 
 ##### send_webhook(payload, req)
 
-Send a webhook notification.
+Send a webhook notification to the peer URL in `req.user.rodit_webhookurl`.
 
 Outbound delivery rejects private / loopback / metadata destinations (and
 resolved addresses), enforces peer JWT `rodit_webhookcidr` when set, and pins
 DNS for the request. `SECURITY_OPTIONS.WEBHOOK_TLS_SKIP_VERIFY` still applies
-to **public** self-signed endpoints.
+to **public** self-signed endpoints only.
 
 ```javascript
 const result = await roditClient.send_webhook({
@@ -2340,16 +2389,23 @@ const result = await roditClient.send_webhook({
   data: { userId: '123', action: 'login' },
   isError: false
 }, req)
+
+if (!result.isValid) {
+  // e.g. WEBHOOK_URL_BLOCKED, WEBHOOK_CIDR_DENIED, WEBHOOK_SEND_ERROR
+  logger.warn('Webhook not delivered', result.error)
+}
 ```
+
+Aliases: `sendWebhook(payload, req)`, `sendWebhookToEndpoint(payload, endpoint, req)`.
 
 **Parameters:**
 - `payload` (Object): Webhook payload
   - `event` (string): Event name
   - `data` (Object): Event data
   - `isError` (boolean): Whether this is an error event
-- `req` (Object): Express request object (optional)
+- `req` (Object): Express request with authenticated `req.user` (peer JWT claims)
 
-**Returns:** `Promise<Object>` - `{ success: boolean, ... }`
+**Returns:** `Promise<Object>` — success `{ isValid: true, message, requestId, duration }` or `{ isValid: false, error: { code, message, requestId } }`
 
 ### Exported Components
 
@@ -2416,8 +2472,8 @@ When you call `roditClient.getConfigOwnRodit()`, you get access to these metadat
 | `serviceprovider_signature` | string | Cryptographic signature for verification |
 | `subjectuniqueidentifier_url` | string | Primary API service endpoint |
 | `userselected_dn` | string | User-selected display name |
-| `webhook_cidr` | string | Allowed IP ranges for webhooks |
-| `webhook_url` | string | Webhook endpoint URL |
+| `webhook_cidr` | string | Allowlist CIDR(s) for outbound webhook resolved IPs (`0.0.0.0/0` = any public IP; private ranges are still blocked by SSRF controls) |
+| `webhook_url` | string | Peer webhook host used as `rodit_webhookurl` in issued JWTs |
 
 ## Best Practices
 
