@@ -1,6 +1,6 @@
 # @rodit/rodit-auth-fe
 
-Browser SDK for RODiT (Routable Decentralized Identity Token) authentication — NEAR wallet (NEP-413), on-chain token verification, and JWT sessions against RODiT-powered APIs.
+Browser SDK for RODiT (RRich Online Digital Token) authentication — NEAR wallet (NEP-413), on-chain token verification, and JWT sessions against RODiT-powered APIs.
 
 **npm:** [https://www.npmjs.com/package/@rodit/rodit-auth-fe](https://www.npmjs.com/package/@rodit/rodit-auth-fe)  
 **Monorepo:** [discernible-io/sdk](../README.md) (this directory)

@@ -10,7 +10,7 @@ Source for the npm packages that power [**RODiT**](https://www.discernible.io)-b
 
 ## What is RODiT?
 
-**RODiT** (Routable Decentralized Identity Token) is a NEAR on-chain credential format. Each token carries metadata — API URL, permissioned routes, rate limits, webhook targets, JWT lifetime, geographic and CIDR constraints — signed by a service provider. APIs built on this SDK use that metadata to authenticate peers, mint JWTs, enforce permissions, and send signed webhooks.
+**RODiT** (RRich Online Digital Token) is a NEAR on-chain credential format. Each token carries metadata — API URL, permissioned routes, rate limits, webhook targets, JWT lifetime, geographic and CIDR constraints — signed by a service provider. APIs built on this SDK use that metadata to authenticate peers, mint JWTs, enforce permissions, and send signed webhooks.
 
 Typical stack:
 

@@ -4,7 +4,7 @@
  * RODiT Frontend Authentication Service
  * 
  * This module provides browser-compatible authentication and verification functions
- * for RODiT (Routable Decentralized Identity Token) operations. It handles:
+ * for RODiT (RRich Online Digital Token) operations. It handles:
  * - NEP-413 authentication flows
  * - JWT token validation
  * - RODiT ownership verification
