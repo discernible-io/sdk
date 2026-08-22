@@ -1,10 +1,22 @@
-# RODiT Authentication SDK
+# @rodit/rodit-auth-be
 
-A comprehensive Node.js SDK for implementing RODiT-based mutual authentication, authorization, self-configuration, and session management in Express.js applications.
+Node.js / Express SDK for RODiT-based mutual authentication, authorization, session management, and webhooks.
 
-**Version:** 9.15.0  
-**License:** Proprietary  
-**Author:** Discernible IO
+**npm:** [https://www.npmjs.com/package/@rodit/rodit-auth-be](https://www.npmjs.com/package/@rodit/rodit-auth-be)  
+**Monorepo:** [discernible-io/sdk](https://github.com/discernible-io/sdk) (this directory)  
+**Version:** 9.15.0 · **License:** Proprietary · **Author:** Discernible IO
+
+## Production deployments
+
+This package is the server runtime behind RODiT-powered APIs, including:
+
+| Deployment | Role |
+|------------|------|
+| [api.identyclaw.com](https://api.identyclaw.com) | IdentyClaw platform API ([source: api-idc](https://github.com/discernible-io/api-idc)) |
+| [api.lastcradle.io](https://api.lastcradle.io) | Last Cradle family API |
+| Custom / federated APIs | Same SDK; sibling APIs in one token family support [federated login](#federated-login-same-family-different-api-url) |
+
+Browser and wallet clients for these APIs use the companion package [`@rodit/rodit-auth-fe`](https://www.npmjs.com/package/@rodit/rodit-auth-fe).
 
 **Login `POST` /api/login:** Use **`accountid`** (or **`roditid`**), **`timestamp`**, and **`base64url_signature`**. Sign UTF-8 bytes of `identifier + timestamp_iso`, and reject deprecated keys such as **`signature`** and **`account_id`**. See [CHANGELOG.md](./CHANGELOG.md).
 

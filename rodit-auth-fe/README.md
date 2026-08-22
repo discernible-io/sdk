@@ -1,10 +1,23 @@
 # @rodit/rodit-auth-fe
 
-Part of the [Discernible IO SDK monorepo](../README.md).
+Browser SDK for RODiT (Routable Decentralized Identity Token) authentication — NEAR wallet (NEP-413), on-chain token verification, and JWT sessions against RODiT-powered APIs.
 
-A browser-based JavaScript SDK for RODiT (Routable Decentralized Identity Token) authentication and verification. This SDK enables secure authentication flows using NEAR Protocol blockchain, NEP-413 signatures, and JWT tokens for API access control.
+**npm:** [https://www.npmjs.com/package/@rodit/rodit-auth-fe](https://www.npmjs.com/package/@rodit/rodit-auth-fe)  
+**Monorepo:** [discernible-io/sdk](../README.md) (this directory)
 
-> **Note**: This is the **frontend/browser** version of the RODiT authentication SDK. For Node.js/backend environments, use [`@rodit/rodit-auth-be`](https://www.npmjs.com/package/@rodit/rodit-auth-be).
+> **Backend counterpart:** Server-side login, permissions, and webhooks live in [`@rodit/rodit-auth-be`](https://www.npmjs.com/package/@rodit/rodit-auth-be).
+
+## Production APIs using this SDK
+
+Web and wallet clients authenticate to live RODiT APIs with `RoditAuthService`, including:
+
+| API | Typical use |
+|-----|-------------|
+| [api.identyclaw.com](https://api.identyclaw.com) | IdentyClaw agents, portals, and mint flows ([api-idc](https://github.com/discernible-io/api-idc)) |
+| [api.lastcradle.io](https://api.lastcradle.io) | Last Cradle family applications |
+| Other `subjectuniqueidentifier_url` endpoints | Any API whose server RODiT metadata points at the same login/JWT contract |
+
+Point `apiEndpoint` at your target API base URL; the server must run [`@rodit/rodit-auth-be`](https://www.npmjs.com/package/@rodit/rodit-auth-be).
 
 ## Overview
 
