@@ -34,7 +34,7 @@ To build a new RODiT-powered API: install [`@rodit/rodit-auth-be`](https://www.n
 
 | Layer | Repo |
 |-------|------|
-| **This SDK** | [`@rodit/rodit-auth-be`](https://www.npmjs.com/package/@rodit/rodit-auth-be) · [`@rodit/rodit-auth-fe`](https://www.npmjs.com/package/@rodit/rodit-auth-fe) |
+| **This SDK** | [rodit-sdk](https://github.com/discernible-io/rodit-sdk) · [`@rodit/rodit-auth-be`](https://www.npmjs.com/package/@rodit/rodit-auth-be) · [`@rodit/rodit-auth-fe`](https://www.npmjs.com/package/@rodit/rodit-auth-fe) |
 | IdentyClaw API | [api-idc](https://github.com/discernible-io/api-idc) → [api.identyclaw.com](https://api.identyclaw.com) |
 | Deploy template | [identyclaw-agents](https://github.com/discernible-io/identyclaw-agents) |
 | OpenClaw plugins | [tools](https://github.com/discernible-io/openclaw-identyclaw-plugin), [A2A](https://github.com/discernible-io/openclaw-a2a-idc-plugin), [webhooks](https://github.com/discernible-io/openclaw-identyclaw-webhooks-plugin) |

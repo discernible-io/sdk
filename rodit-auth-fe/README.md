@@ -3,7 +3,7 @@
 Browser SDK for RODiT (RRich Online Digital Token) authentication — NEAR wallet (NEP-413), on-chain token verification, and JWT sessions against RODiT-powered APIs.
 
 **npm:** [https://www.npmjs.com/package/@rodit/rodit-auth-fe](https://www.npmjs.com/package/@rodit/rodit-auth-fe)  
-**Monorepo:** [discernible-io/sdk](../README.md) (this directory)
+**Monorepo:** [discernible-io/rodit-sdk](../README.md) (this directory)
 
 > **Backend counterpart:** Server-side login, permissions, and webhooks live in [`@rodit/rodit-auth-be`](https://www.npmjs.com/package/@rodit/rodit-auth-be).
 
@@ -423,7 +423,7 @@ REACT_APP_NEAR_RPC_URL=https://rpcnear.org
 - **Name**: `@rodit/rodit-auth-fe`
 - **Version**: 3.0.6
 - **License**: UNLICENSED
-- **Repository**: https://github.com/discernible-io/rodit-auth-fe
+- **Repository**: https://github.com/discernible-io/rodit-sdk/tree/main/rodit-auth-fe
 - **Node Version**: >=20.0.0
 
 ## Related Packages

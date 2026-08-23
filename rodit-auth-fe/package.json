@@ -44,10 +44,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/discernible-io/rodit-auth-fe.git"
+    "url": "git+https://github.com/discernible-io/rodit-sdk.git",
+    "directory": "rodit-auth-fe"
   },
   "bugs": {
-    "url": "https://github.com/discernible-io/rodit-auth-fe/issues"
+    "url": "https://github.com/discernible-io/rodit-sdk/issues"
   },
-  "homepage": "https://github.com/discernible-io/rodit-auth-fe#readme"
+  "homepage": "https://github.com/discernible-io/rodit-sdk/tree/main/rodit-auth-fe#readme"
 }

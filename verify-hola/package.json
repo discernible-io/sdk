@@ -33,9 +33,13 @@
   "private": false,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/discernible-io/sdk.git",
+    "url": "git+https://github.com/discernible-io/rodit-sdk.git",
     "directory": "verify-hola"
   },
+  "bugs": {
+    "url": "https://github.com/discernible-io/rodit-sdk/issues"
+  },
+  "homepage": "https://github.com/discernible-io/rodit-sdk/tree/main/verify-hola#readme",
   "publishConfig": {
     "access": "public"
   },

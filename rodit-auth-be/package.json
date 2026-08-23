@@ -46,8 +46,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/discernible-io/rodit-auth-be.git"
+    "url": "git+https://github.com/discernible-io/rodit-sdk.git",
+    "directory": "rodit-auth-be"
   },
+  "bugs": {
+    "url": "https://github.com/discernible-io/rodit-sdk/issues"
+  },
+  "homepage": "https://github.com/discernible-io/rodit-sdk/tree/main/rodit-auth-be#readme",
   "publishConfig": {
     "access": "public"
   },
